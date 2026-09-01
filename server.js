@@ -225,20 +225,59 @@ function requireAnthropic() {
   }
 }
 
+// Finds every balanced [...]/{...} substring in text (tracking bracket depth and
+// skipping over quoted strings so brackets inside string values don't confuse it),
+// in order of appearance. Used to pick out real JSON even when Claude's prose
+// contains stray brackets of its own (e.g. "- format: [a trending sound]" as a
+// notation, not JSON) - a naive first-bracket-to-last-bracket match would span
+// across those and produce an invalid blob.
+function findBalancedJsonCandidates(text) {
+  const candidates = [];
+  const openers = { "[": "]", "{": "}" };
+  for (let i = 0; i < text.length; i++) {
+    const opener = text[i];
+    const closer = openers[opener];
+    if (!closer) continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let j = i; j < text.length; j++) {
+      const ch = text[j];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === "\\") escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') inString = true;
+      else if (ch === opener) depth++;
+      else if (ch === closer) {
+        depth--;
+        if (depth === 0) {
+          candidates.push(text.slice(i, j + 1));
+          break;
+        }
+      }
+    }
+  }
+  return candidates;
+}
+
 function parseJsonFromClaude(text, label) {
   const cleaned = text.trim().replace(/^```json\s*|^```\s*|```$/g, "");
   try {
     return JSON.parse(cleaned);
   } catch (e) {
     // Claude sometimes wraps the JSON in a sentence or two, even when asked not to
-    // (more likely when web search is involved). Fall back to grabbing the outermost
-    // [...] or {...} block before giving up.
-    const match = cleaned.match(/[[{][\s\S]*[\]}]/);
-    if (match) {
+    // (more likely when web search is involved). Try every balanced bracket
+    // substring and use the first one that's genuinely valid JSON - prefer the
+    // longest, since the real answer is normally the biggest structure in the text.
+    const candidates = findBalancedJsonCandidates(cleaned).sort((a, b) => b.length - a.length);
+    for (const candidate of candidates) {
       try {
-        return JSON.parse(match[0]);
+        return JSON.parse(candidate);
       } catch (e2) {
-        // fall through to the original error below
+        // try the next candidate
       }
     }
     throw new Error(`Could not parse JSON from Claude (${label}): ${e.message}`);
@@ -256,8 +295,18 @@ async function askClaude(prompt, maxTokens = 2000) {
   return textBlock.text;
 }
 
+// Real check (not just "contains a bracket somewhere") - Claude's prose can include
+// stray brackets of its own (e.g. "- format: [a trending sound]" as notation), which
+// a naive presence check would mistake for JSON already being present.
 function looksLikeJson(text) {
-  return /[[{][\s\S]*[\]}]/.test(text.trim());
+  return findBalancedJsonCandidates(text.trim()).some((c) => {
+    try {
+      JSON.parse(c);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  });
 }
 
 // Temporary diagnostics for a search-generation bug: captures a summary of each
