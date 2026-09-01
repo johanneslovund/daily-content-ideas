@@ -12,5 +12,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Rebuild and restart daily-content-ideas + cloudflared
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TUNNEL_UPDATE_SECRET: ${{ secrets.TUNNEL_UPDATE_SECRET }}
         run: |
           docker compose up -d --build daily-content-ideas cloudflared
