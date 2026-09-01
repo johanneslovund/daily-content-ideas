@@ -19,6 +19,19 @@ const CRON_TIMEZONE = process.env.CRON_TIMEZONE || "Europe/Oslo";
 // details ever change; defaults reflect the real Palm Tree Productions setup. ----
 const CATEGORIES = ["kygo", "palm-tree-productions", "johannes-lovund"];
 
+// Kygo-specific sub-filters for the New Ideas / Used / Favorites views. Other
+// categories don't use these yet.
+const SUBCATEGORIES = {
+  kygo: {
+    shows: "Shows - live performance content: performing, backstage, crowd energy, touring life",
+    lifestyle: "Lifestyle - sunset/tropical/travel/personal-life content, non-performance moments",
+    "music-production": "Music Production - studio, DAW, sound design, the creative process of making music",
+  },
+};
+function isValidSubcategory(category, subcategory) {
+  return !!SUBCATEGORIES[category] && Object.prototype.hasOwnProperty.call(SUBCATEGORIES[category], subcategory);
+}
+
 const BRAND_CONTEXTS = {
   "kygo":
     process.env.BRAND_CONTEXT_KYGO ||
@@ -119,6 +132,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS ideas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     category TEXT NOT NULL DEFAULT 'kygo',
+    subcategory TEXT,
     title TEXT NOT NULL,
     description TEXT NOT NULL,
     template TEXT,
@@ -178,10 +192,11 @@ ensureColumn("inspiration", "source_url", "TEXT");
 ensureColumn("inspiration", "source_name", "TEXT");
 ensureColumn("ideas", "trend_note", "TEXT");
 ensureColumn("ideas", "template", "TEXT");
+ensureColumn("ideas", "subcategory", "TEXT");
 
 const insertIdea = db.prepare(`
-  INSERT INTO ideas (category, title, description, template, platform, hook, format, trend_note, plan_id, phase)
-  VALUES (@category, @title, @description, @template, @platform, @hook, @format, @trend_note, @plan_id, @phase)
+  INSERT INTO ideas (category, subcategory, title, description, template, platform, hook, format, trend_note, plan_id, phase)
+  VALUES (@category, @subcategory, @title, @description, @template, @platform, @hook, @format, @trend_note, @plan_id, @phase)
 `);
 
 const insertCaption = db.prepare(`
@@ -251,10 +266,19 @@ async function askClaudeWithSearch(prompt, maxTokens = 2000, maxSearches = 5) {
   return textBlocks[textBlocks.length - 1].text;
 }
 
-async function generateIdeas(category, count = IDEAS_PER_BATCH) {
+async function generateIdeas(category, count = IDEAS_PER_BATCH, subcategory = null) {
   requireAnthropic();
-  const prompt = `${brandContextFor(category)}
+  const subcats = SUBCATEGORIES[category];
+  let subcategoryInstruction = "";
+  if (subcats) {
+    const list = Object.entries(subcats).map(([key, desc]) => `- "${key}": ${desc}`).join("\n");
+    subcategoryInstruction = subcategory
+      ? `\nEvery one of the ${count} ideas must be in the "${subcategory}" subcategory specifically:\n${subcats[subcategory]}\n`
+      : `\nEach idea must be tagged with exactly one of these subcategories, spread roughly evenly across all of them:\n${list}\n`;
+  }
 
+  const prompt = `${brandContextFor(category)}
+${subcategoryInstruction}
 Generate ${count} new, concrete short-form video content ideas (Reels/TikTok/Shorts) for this
 brand, executable moving forward from today. Avoid repeating generic "show your studio life"
 suggestions - be specific about WHAT TO FILM, even when the idea itself is a generic, evergreen
@@ -303,7 +327,7 @@ Respond with ONLY valid JSON, a list of objects with exactly these fields:
     "platform": "Instagram Reels | TikTok | YouTube Shorts | All",
     "hook": "Suggested first 1-3 seconds / hook line",
     "format": "e.g. POV, Behind-the-scenes, Skit, Tutorial, Countdown, Duet/Collab, Storytime",
-    "trendNote": "if this idea rides a current trend, briefly name it (e.g. 'uses trending sound: [name]'); otherwise null"
+    "trendNote": "if this idea rides a current trend, briefly name it (e.g. 'uses trending sound: [name]'); otherwise null"${subcats ? `,\n    "subcategory": "one of: ${Object.keys(subcats).join(" | ")}"` : ""}
   }
 ]
 
@@ -317,6 +341,7 @@ text. Write the final JSON as your last message, after any searching.`;
     for (const item of items) {
       insertIdea.run({
         category,
+        subcategory: subcategory || (isValidSubcategory(category, item.subcategory) ? item.subcategory : null),
         title: item.title || "Untitled",
         description: item.description || "",
         template: item.template || null,
@@ -512,6 +537,7 @@ text. Write the final JSON as your last message, after any searching.`;
     for (const item of plan.ideas) {
       insertIdea.run({
         category: "song-release-plan",
+        subcategory: null,
         title: item.title || "Untitled",
         description: item.description || "",
         template: null,
@@ -542,22 +568,33 @@ app.get("/api/ideas", (req, res) => {
   if (category && !isValidCategory(category) && category !== "song-release-plan") {
     return res.status(400).json({ error: "Invalid category" });
   }
+  const subcategory = req.query.subcategory;
+  if (subcategory && !isValidSubcategory(category, subcategory)) {
+    return res.status(400).json({ error: "Invalid subcategory for this category" });
+  }
+
+  const conditions = [];
+  const params = [];
   // Favorites are shown regardless of used state - they persist until manually
   // unfavorited or deleted, independent of the new/used workflow.
   if (req.query.favorited === "1") {
-    const rows = category
-      ? db
-          .prepare(`SELECT * FROM ideas WHERE favorited = 1 AND category = ? ORDER BY created_at DESC LIMIT 200`)
-          .all(category)
-      : db.prepare(`SELECT * FROM ideas WHERE favorited = 1 ORDER BY created_at DESC LIMIT 200`).all();
-    return res.json(rows);
+    conditions.push("favorited = 1");
+  } else {
+    conditions.push("used = ?");
+    params.push(req.query.used === "1" ? 1 : 0);
   }
-  const showUsed = req.query.used === "1";
-  const rows = category
-    ? db
-        .prepare(`SELECT * FROM ideas WHERE used = ? AND category = ? ORDER BY created_at DESC LIMIT 200`)
-        .all(showUsed ? 1 : 0, category)
-    : db.prepare(`SELECT * FROM ideas WHERE used = ? ORDER BY created_at DESC LIMIT 200`).all(showUsed ? 1 : 0);
+  if (category) {
+    conditions.push("category = ?");
+    params.push(category);
+  }
+  if (subcategory) {
+    conditions.push("subcategory = ?");
+    params.push(subcategory);
+  }
+
+  const rows = db
+    .prepare(`SELECT * FROM ideas WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT 200`)
+    .all(...params);
   res.json(rows);
 });
 
@@ -567,8 +604,12 @@ app.post("/api/ideas/generate", async (req, res) => {
     if (!isValidCategory(category)) {
       return res.status(400).json({ ok: false, error: "Invalid or missing category" });
     }
+    const subcategory = req.body?.subcategory || null;
+    if (subcategory && !isValidSubcategory(category, subcategory)) {
+      return res.status(400).json({ ok: false, error: "Invalid subcategory for this category" });
+    }
     const count = parseInt(req.body?.count, 10) || IDEAS_PER_BATCH;
-    const n = await generateIdeas(category, count);
+    const n = await generateIdeas(category, count, subcategory);
     res.json({ ok: true, generated: n });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
