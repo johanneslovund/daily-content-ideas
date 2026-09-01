@@ -1,0 +1,22 @@
+Lim inn dette som et nytt kort i grid-en på ptp-internal sin index.html,
+ved siden av de andre 8 kortene (Lead Finder, Byrå Finder, osv.):
+
+<a href="content-ideas.html" style="text-decoration:none; color:inherit;">
+  <div class="[SAMME KORT-CLASS SOM DE ANDRE KORTENE]">
+    <div>🌴</div>
+    <h3>Content Ideas</h3>
+    <p>
+      Daglige content-idéer og caption-forslag for Palm Tree/Kygo-innhold,
+      generert automatisk og skreddersydd for engasjement.
+    </p>
+    <div class="[SAMME STAT-CLASS - grønn tekst]">Oppdateres daglig</div>
+    <div>Åpne verktøy →</div>
+  </div>
+</a>
+
+MERK: Jeg vet ikke nøyaktig CSS-klassenavnene ptp-internal bruker for kortene
+(f.eks. hva "Lead Finder"-kortet sin <div> heter i koden), siden jeg ikke fikk
+lastet siden i nettleseren for å se kildekoden direkte. Åpne index.html, kopier
+ett av de eksisterende kortene (f.eks. "Aktører"), og bytt bare ut emoji,
+tittel, beskrivelse, stat-linje og lenken (href) - da arver det automatisk
+riktig styling.

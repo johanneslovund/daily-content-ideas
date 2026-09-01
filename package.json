@@ -1,0 +1,17 @@
+{
+  "name": "daily-content-ideas",
+  "version": "1.0.0",
+  "description": "Intern daglig content-idé-generator for musikk/DJ-artist-innhold (inspirert av SocialSound Daily Content Ideas)",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "better-sqlite3": "^11.3.0",
+    "cors": "^2.8.5",
+    "express": "^4.21.0",
+    "node-cron": "^3.0.3"
+  }
+}

@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Content Ideas | Palm Tree Productions</title>
+<script>
+  // Sett NAS-ens lokale IP + port fra docker-compose.yml (standard 3060)
+  window.CONTENT_IDEAS_API = "http://SETT-NAS-IP-HER:3060"; // f.eks. "http://192.168.1.197:3060"
+</script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #151a21;
+    --border: rgba(255,255,255,0.08);
+    --text: #e6edf3;
+    --muted: #8b98a5;
+    --accent: #3ecf8e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 40px 16px 80px;
+  }
+  .top { max-width: 1000px; margin: 0 auto 8px; }
+  .back-link { color: var(--muted); font-size: 13px; text-decoration: none; }
+  .back-link:hover { color: var(--text); }
+  header { max-width: 1000px; margin: 12px auto 28px; text-align: center; }
+  h1 { font-size: 22px; margin: 0 0 6px; font-weight: 600; letter-spacing: 0.3px; }
+  .subtitle { color: var(--muted); font-size: 14px; max-width: 600px; margin: 0 auto; }
+  .controls { max-width: 1000px; margin: 0 auto 20px; display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+  .tab { padding: 7px 16px; border-radius: 8px; background: var(--card); color: var(--muted); cursor: pointer; font-size: 13px; border: 1px solid var(--border); }
+  .tab.active { color: var(--text); border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #06251a; border: none; padding: 9px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 13px; }
+  button.primary:disabled { opacity: 0.5; cursor: default; }
+  .topic-box { max-width: 1000px; margin: 0 auto 20px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .topic-box input { flex: 1; min-width: 260px; max-width: 500px; background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 9px 14px; border-radius: 8px; font-size: 14px; }
+  .grid { max-width: 1000px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+  .card { background: var(--card); border-radius: 12px; padding: 18px 20px; border: 1px solid var(--border); }
+  .card h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+  .meta { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; }
+  .badge { font-size: 10px; padding: 2px 8px; border-radius: 999px; background: rgba(62,207,142,0.12); color: var(--accent); }
+  .desc { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 8px 0; }
+  .hook { color: var(--muted); font-size: 12px; font-style: italic; }
+  .actions { margin-top: 12px; display: flex; gap: 6px; flex-wrap: wrap; }
+  .actions button { background: transparent; border: 1px solid var(--border); color: var(--text); padding: 5px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+  .actions button:hover { border-color: var(--accent); }
+  .empty { text-align: center; color: var(--muted); padding: 60px 20px; grid-column: 1 / -1; }
+  .status { max-width: 1000px; margin: 0 auto 12px; text-align: center; font-size: 13px; color: var(--muted); }
+  .warning { max-width: 1000px; margin: 0 auto 20px; padding: 12px 16px; border-radius: 10px; background: rgba(255, 138, 128, 0.1); border: 1px solid rgba(255, 138, 128, 0.3); color: #ffab91; font-size: 13px; display: none; text-align: center; }
+  .captions-block { margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); display: none; }
+  .captions-block.open { display: block; }
+  .caption-card { background: rgba(255,255,255,0.03); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+  .caption-label { font-size: 10px; color: var(--accent); font-weight: 600; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.4px; }
+  .caption-text { font-size: 13px; white-space: pre-wrap; line-height: 1.5; color: var(--text); }
+  .caption-copy { margin-top: 6px; background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 3px 9px; border-radius: 6px; font-size: 11px; cursor: pointer; }
+</style>
+</head>
+<body>
+  <div class="top"><a class="back-link" href="index.html">← Tilbake til oversikten</a></div>
+  <header>
+    <h1>🌴 Content Ideas</h1>
+    <p class="subtitle">Daglige content-idéer og caption-forslag for Palm Tree Music Festival / Kygo-innhold — generert automatisk, personlig og laget for engasjement.</p>
+  </header>
+  <div class="warning" id="configWarning">
+    ⚠️ Siden peker ikke mot Docker-tjenesten ennå. Åpne filen og sett riktig NAS-IP i <code>window.CONTENT_IDEAS_API</code> øverst i koden.
+  </div>
+  <div class="status" id="status"></div>
+  <div class="controls">
+    <div class="tab active" data-tab="new">Nye idéer</div>
+    <div class="tab" data-tab="used">Brukt</div>
+    <div class="tab" data-tab="captions">✍️ Captions</div>
+    <button class="primary" id="generateBtn">🚀 Generer nye idéer</button>
+  </div>
+  <div class="topic-box" id="topicBox" style="display:none;">
+    <input type="text" id="topicInput" placeholder="Beskriv innlegget captionen er til, f.eks. 'backstage-klipp fra festivalen i går kveld'" />
+    <button class="primary" id="topicGenerateBtn">✍️ Lag captions</button>
+  </div>
+  <div class="grid" id="grid"></div>
+
+<script>
+const API = window.CONTENT_IDEAS_API;
+let currentView = 'new';
+
+if (!API || API.includes('SETT-NAS-IP-HER')) {
+  document.getElementById('configWarning').style.display = 'block';
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+async function load() {
+  const generateBtn = document.getElementById('generateBtn');
+  const topicBox = document.getElementById('topicBox');
+  if (currentView === 'captions') {
+    generateBtn.style.display = 'none';
+    topicBox.style.display = 'flex';
+    await loadStandaloneCaptions();
+  } else {
+    generateBtn.style.display = 'inline-block';
+    topicBox.style.display = 'none';
+    await loadIdeas();
+  }
+}
+
+async function loadIdeas() {
+  const used = currentView === 'used' ? 1 : 0;
+  const res = await fetch(`${API}/api/ideas?used=${used}`);
+  const ideas = await res.json();
+  const grid = document.getElementById('grid');
+  if (!ideas.length) {
+    grid.innerHTML = `<div class="empty">Ingen idéer her ennå. Trykk "Generer nye idéer" for å komme i gang.</div>`;
+    return;
+  }
+  grid.innerHTML = ideas.map(idea => `
+    <div class="card" id="idea-${idea.id}">
+      <h3>${escapeHtml(idea.title)}</h3>
+      <div class="meta">
+        ${idea.platform ? `<span class="badge">${escapeHtml(idea.platform)}</span>` : ''}
+        ${idea.format ? `<span class="badge">${escapeHtml(idea.format)}</span>` : ''}
+      </div>
+      <div class="desc">${escapeHtml(idea.description)}</div>
+      ${idea.hook ? `<div class="hook">Hook: "${escapeHtml(idea.hook)}"</div>` : ''}
+      <div class="actions">
+        <button onclick="toggleUsed(${idea.id}, ${currentView === 'new'})">${currentView === 'new' ? '✅ Brukt' : '↩️ Legg tilbake'}</button>
+        <button onclick="generateCaptionsForIdea(${idea.id})">✍️ Captions</button>
+        <button onclick="removeIdea(${idea.id})">🗑️</button>
+      </div>
+      <div class="captions-block" id="captions-${idea.id}"></div>
+    </div>
+  `).join('');
+}
+
+function renderCaptionCards(captions) {
+  return captions.map(c => `
+    <div class="caption-card">
+      <div class="caption-label">${escapeHtml(c.label)}</div>
+      <div class="caption-text">${escapeHtml(c.text)}</div>
+      <button class="caption-copy" onclick="copyCaption(this)">📋 Kopier</button>
+    </div>
+  `).join('');
+}
+
+function copyCaption(btn) {
+  const text = btn.previousElementSibling.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const original = btn.textContent;
+    btn.textContent = '✅ Kopiert!';
+    setTimeout(() => { btn.textContent = original; }, 1500);
+  });
+}
+
+async function generateCaptionsForIdea(ideaId) {
+  const block = document.getElementById(`captions-${ideaId}`);
+  block.classList.add('open');
+  block.innerHTML = `<div style="color:var(--muted); font-size:12px;">⏳ Genererer captions...</div>`;
+  try {
+    const res = await fetch(`${API}/api/captions/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ideaId })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      block.innerHTML = renderCaptionCards(data.captions);
+    } else {
+      block.innerHTML = `<div style="color:#ff8a80; font-size:12px;">❌ ${escapeHtml(data.error)}</div>`;
+    }
+  } catch (e) {
+    block.innerHTML = `<div style="color:#ff8a80; font-size:12px;">❌ ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadStandaloneCaptions() {
+  const res = await fetch(`${API}/api/captions`);
+  const rows = await res.json();
+  const grid = document.getElementById('grid');
+  if (!rows.length) {
+    grid.innerHTML = `<div class="empty">Ingen frittstående captions ennå. Beskriv et innlegg over og trykk "Lag captions".</div>`;
+    return;
+  }
+  const groups = {};
+  for (const r of rows) {
+    const key = r.topic + '|' + r.created_at.slice(0, 16);
+    if (!groups[key]) groups[key] = { topic: r.topic, items: [] };
+    groups[key].items.push(r);
+  }
+  grid.innerHTML = Object.values(groups).map(g => `
+    <div class="card">
+      <h3>${escapeHtml(g.topic)}</h3>
+      ${renderCaptionCards(g.items)}
+    </div>
+  `).join('');
+}
+
+async function toggleUsed(id, used) {
+  await fetch(`${API}/api/ideas/${id}/used`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ used })
+  });
+  load();
+}
+
+async function removeIdea(id) {
+  if (!confirm('Slette denne idéen?')) return;
+  await fetch(`${API}/api/ideas/${id}`, { method: 'DELETE' });
+  load();
+}
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentView = tab.dataset.tab;
+    setStatus('');
+    load();
+  });
+});
+
+document.getElementById('generateBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Genererer...';
+  setStatus('');
+  try {
+    const res = await fetch(`${API}/api/ideas/generate`, { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      setStatus(`✅ ${data.generated} nye idéer generert.`);
+      currentView = 'new';
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelector('.tab[data-tab="new"]').classList.add('active');
+      load();
+    } else {
+      setStatus(`❌ Feil: ${data.error}`);
+    }
+  } catch (e) {
+    setStatus(`❌ Feil: ${e.message}`);
+  }
+  btn.disabled = false;
+  btn.textContent = '🚀 Generer nye idéer';
+});
+
+document.getElementById('topicGenerateBtn').addEventListener('click', async () => {
+  const input = document.getElementById('topicInput');
+  const topic = input.value.trim();
+  if (!topic) { setStatus('❌ Skriv inn hva innlegget handler om først.'); return; }
+  const btn = document.getElementById('topicGenerateBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Genererer...';
+  setStatus('');
+  try {
+    const res = await fetch(`${API}/api/captions/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setStatus(`✅ ${data.captions.length} caption-forslag generert.`);
+      input.value = '';
+      loadStandaloneCaptions();
+    } else {
+      setStatus(`❌ Feil: ${data.error}`);
+    }
+  } catch (e) {
+    setStatus(`❌ Feil: ${e.message}`);
+  }
+  btn.disabled = false;
+  btn.textContent = '✍️ Lag captions';
+});
+
+load();
+</script>
+</body>
+</html>

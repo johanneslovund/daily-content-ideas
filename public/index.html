@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Daily Content Ideas</title>
+<style>
+  :root {
+    --bg: #0f1720;
+    --card: #182430;
+    --accent: #ff9f5a;
+    --accent2: #4ecdc4;
+    --text: #eef2f5;
+    --muted: #90a4ae;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(160deg, #0f1720 0%, #1a2b3c 100%);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 24px 16px 80px;
+  }
+  header {
+    max-width: 900px;
+    margin: 0 auto 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  h1 {
+    font-size: 22px;
+    margin: 0;
+  }
+  h1 span { color: var(--accent); }
+  .tabs {
+    max-width: 900px;
+    margin: 0 auto 16px;
+    display: flex;
+    gap: 8px;
+  }
+  .tab {
+    padding: 8px 16px;
+    border-radius: 999px;
+    background: var(--card);
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 14px;
+    border: 1px solid transparent;
+  }
+  .tab.active {
+    color: var(--text);
+    border-color: var(--accent);
+  }
+  button.primary {
+    background: linear-gradient(135deg, var(--accent), #ff6b6b);
+    color: #1a1a1a;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  button.primary:disabled { opacity: 0.6; cursor: default; }
+  .grid {
+    max-width: 900px;
+    margin: 0 auto;
+    display: grid;
+    gap: 14px;
+  }
+  .card {
+    background: var(--card);
+    border-radius: 14px;
+    padding: 16px 18px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .card h3 {
+    margin: 0 0 6px;
+    font-size: 17px;
+  }
+  .meta {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin: 8px 0;
+  }
+  .badge {
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgba(78,205,196,0.15);
+    color: var(--accent2);
+  }
+  .badge.format {
+    background: rgba(255,159,90,0.15);
+    color: var(--accent);
+  }
+  .desc { color: var(--text); font-size: 14px; line-height: 1.5; margin: 8px 0; }
+  .hook { color: var(--muted); font-size: 13px; font-style: italic; }
+  .actions { margin-top: 12px; display: flex; gap: 8px; }
+  .actions button {
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.15);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .empty {
+    text-align: center;
+    color: var(--muted);
+    padding: 60px 20px;
+  }
+  .status {
+    max-width: 900px;
+    margin: 0 auto 12px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .captions-block {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed rgba(255,255,255,0.12);
+    display: none;
+  }
+  .captions-block.open { display: block; }
+  .caption-card {
+    background: rgba(255,255,255,0.04);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+  }
+  .caption-label {
+    font-size: 11px;
+    color: var(--accent2);
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  .caption-text {
+    font-size: 13px;
+    white-space: pre-wrap;
+    line-height: 1.5;
+  }
+  .caption-copy {
+    margin-top: 6px;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.15);
+    color: var(--muted);
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .topic-box {
+    max-width: 900px;
+    margin: 0 auto 16px;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .topic-box input {
+    flex: 1;
+    min-width: 220px;
+    background: var(--card);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--text);
+    padding: 10px 14px;
+    border-radius: 10px;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🌴 Daily Content <span>Ideas</span></h1>
+    <button class="primary" id="generateBtn">🚀 Generer nye idéer</button>
+  </header>
+  <div class="status" id="status"></div>
+  <div class="tabs">
+    <div class="tab active" data-tab="new">Nye idéer</div>
+    <div class="tab" data-tab="used">Brukt</div>
+    <div class="tab" data-tab="captions">✍️ Captions</div>
+  </div>
+
+  <div class="topic-box" id="topicBox" style="display:none;">
+    <input type="text" id="topicInput" placeholder="Beskriv innlegget captionen er til, f.eks. 'backstage-klipp fra festivalen i går kveld'" />
+    <button class="primary" id="topicGenerateBtn">✍️ Lag captions</button>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+<script>
+let currentView = 'new'; // 'new' | 'used' | 'captions'
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+async function load() {
+  const generateBtn = document.getElementById('generateBtn');
+  const topicBox = document.getElementById('topicBox');
+  if (currentView === 'captions') {
+    generateBtn.style.display = 'none';
+    topicBox.style.display = 'flex';
+    await loadStandaloneCaptions();
+  } else {
+    generateBtn.style.display = 'inline-block';
+    topicBox.style.display = 'none';
+    await loadIdeas();
+  }
+}
+
+async function loadIdeas() {
+  const used = currentView === 'used' ? 1 : 0;
+  const res = await fetch(`/api/ideas?used=${used}`);
+  const ideas = await res.json();
+  const grid = document.getElementById('grid');
+  if (!ideas.length) {
+    grid.innerHTML = `<div class="empty">Ingen idéer her ennå. Trykk "Generer nye idéer" for å komme i gang.</div>`;
+    return;
+  }
+  grid.innerHTML = ideas.map(idea => `
+    <div class="card" id="idea-${idea.id}">
+      <h3>${escapeHtml(idea.title)}</h3>
+      <div class="meta">
+        ${idea.platform ? `<span class="badge">${escapeHtml(idea.platform)}</span>` : ''}
+        ${idea.format ? `<span class="badge format">${escapeHtml(idea.format)}</span>` : ''}
+      </div>
+      <div class="desc">${escapeHtml(idea.description)}</div>
+      ${idea.hook ? `<div class="hook">Hook: "${escapeHtml(idea.hook)}"</div>` : ''}
+      <div class="actions">
+        <button onclick="toggleUsed(${idea.id}, ${currentView === 'new'})">${currentView === 'new' ? '✅ Marker som brukt' : '↩️ Legg tilbake'}</button>
+        <button onclick="generateCaptionsForIdea(${idea.id})">✍️ Lag captions</button>
+        <button onclick="removeIdea(${idea.id})">🗑️ Slett</button>
+      </div>
+      <div class="captions-block" id="captions-${idea.id}"></div>
+    </div>
+  `).join('');
+}
+
+function renderCaptionCards(captions) {
+  return captions.map(c => `
+    <div class="caption-card">
+      <div class="caption-label">${escapeHtml(c.label)}</div>
+      <div class="caption-text" id="ctext-${c.id || Math.random()}">${escapeHtml(c.text)}</div>
+      <button class="caption-copy" onclick="copyCaption(this)">📋 Kopier</button>
+    </div>
+  `).join('');
+}
+
+function copyCaption(btn) {
+  const text = btn.previousElementSibling.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    const original = btn.textContent;
+    btn.textContent = '✅ Kopiert!';
+    setTimeout(() => { btn.textContent = original; }, 1500);
+  });
+}
+
+async function generateCaptionsForIdea(ideaId) {
+  const block = document.getElementById(`captions-${ideaId}`);
+  block.classList.add('open');
+  block.innerHTML = `<div style="color:var(--muted); font-size:13px;">⏳ Genererer captions...</div>`;
+  try {
+    const res = await fetch('/api/captions/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ideaId })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      block.innerHTML = renderCaptionCards(data.captions);
+    } else {
+      block.innerHTML = `<div style="color:#ff8a80; font-size:13px;">❌ ${escapeHtml(data.error)}</div>`;
+    }
+  } catch (e) {
+    block.innerHTML = `<div style="color:#ff8a80; font-size:13px;">❌ ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+async function loadStandaloneCaptions() {
+  const res = await fetch('/api/captions');
+  const rows = await res.json();
+  const grid = document.getElementById('grid');
+  if (!rows.length) {
+    grid.innerHTML = `<div class="empty">Ingen frittstående captions ennå. Beskriv et innlegg over og trykk "Lag captions".</div>`;
+    return;
+  }
+  // Grupper captions generert i samme "batch" (samme minutt + samme topic) i én kort
+  const groups = {};
+  for (const r of rows) {
+    const key = r.topic + '|' + r.created_at.slice(0, 16);
+    if (!groups[key]) groups[key] = { topic: r.topic, items: [] };
+    groups[key].items.push(r);
+  }
+  grid.innerHTML = Object.values(groups).map(g => `
+    <div class="card">
+      <h3>${escapeHtml(g.topic)}</h3>
+      ${renderCaptionCards(g.items)}
+      <div class="actions">
+        ${g.items.map(i => `<button onclick="removeCaption(${i.id})">🗑️ Slett "${escapeHtml(i.label)}"</button>`).join('')}
+      </div>
+    </div>
+  `).join('');
+}
+
+async function removeCaption(id) {
+  await fetch(`/api/captions/${id}`, { method: 'DELETE' });
+  load();
+}
+
+async function toggleUsed(id, used) {
+  await fetch(`/api/ideas/${id}/used`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ used })
+  });
+  load();
+}
+
+async function removeIdea(id) {
+  if (!confirm('Slette denne idéen?')) return;
+  await fetch(`/api/ideas/${id}`, { method: 'DELETE' });
+  load();
+}
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    currentView = tab.dataset.tab;
+    setStatus('');
+    load();
+  });
+});
+
+document.getElementById('generateBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('generateBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Genererer...';
+  setStatus('');
+  try {
+    const res = await fetch('/api/ideas/generate', { method: 'POST' });
+    const data = await res.json();
+    if (data.ok) {
+      setStatus(`✅ ${data.generated} nye idéer generert.`);
+      currentView = 'new';
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelector('.tab[data-tab="new"]').classList.add('active');
+      load();
+    } else {
+      setStatus(`❌ Feil: ${data.error}`);
+    }
+  } catch (e) {
+    setStatus(`❌ Feil: ${e.message}`);
+  }
+  btn.disabled = false;
+  btn.textContent = '🚀 Generer nye idéer';
+});
+
+document.getElementById('topicGenerateBtn').addEventListener('click', async () => {
+  const input = document.getElementById('topicInput');
+  const topic = input.value.trim();
+  if (!topic) {
+    setStatus('❌ Skriv inn hva innlegget handler om først.');
+    return;
+  }
+  const btn = document.getElementById('topicGenerateBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Genererer...';
+  setStatus('');
+  try {
+    const res = await fetch('/api/captions/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      setStatus(`✅ ${data.captions.length} caption-forslag generert.`);
+      input.value = '';
+      loadStandaloneCaptions();
+    } else {
+      setStatus(`❌ Feil: ${data.error}`);
+    }
+  } catch (e) {
+    setStatus(`❌ Feil: ${e.message}`);
+  }
+  btn.disabled = false;
+  btn.textContent = '✍️ Lag captions';
+});
+
+load();
+</script>
+</body>
+</html>

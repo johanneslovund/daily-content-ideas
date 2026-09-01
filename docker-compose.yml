@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  daily-content-ideas:
+    build: .
+    container_name: daily-content-ideas
+    restart: unless-stopped
+    ports:
+      - "3060:3060"
+    environment:
+      # Lim inn din Anthropic API-nøkkel her (fra console.anthropic.com)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CLAUDE_MODEL=claude-sonnet-4-6
+      - IDEAS_PER_BATCH=8
+      # Cron: min hour day month weekday -> "0 7 * * *" = hver dag kl 07:00
+      - CRON_SCHEDULE=0 7 * * *
+      # Tilpass merkevare-konteksten idéene skal genereres ut fra
+      - BRAND_CONTEXT=Vi lager innhold for en tropical house / DJ-artist og festival-merkevaren "Palm Tree Music Festival". Malgruppe: unge, festival- og musikkinteresserte følgere på Instagram Reels, TikTok og YouTube Shorts. Stil: solfylt, tropisk, "disco palm tree"-visuell identitet, backstage/studio-glimt, festival-øyeblikk, samarbeid med andre artister, remix-drops, behind-the-scenes fra produksjon og turné.
+      # Begrenser hvem som får kalle API-et fra nettleser (CORS)
+      - ALLOWED_ORIGIN=https://ptp-internal.pages.dev
+    volumes:
+      - ./data:/app/data
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-content-ideas
+    restart: unless-stopped
+    # TUNNEL_TOKEN settes som miljøvariabel i Portainer (Stacks > Environment variables) - ikke her i koden.
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    depends_on:
+      - daily-content-ideas
