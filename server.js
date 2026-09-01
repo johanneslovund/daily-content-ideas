@@ -53,22 +53,40 @@ Ideas must be concrete enough to actually film or produce within a few days.
     process.env.BRAND_CONTEXT_PTP ||
     `
 Palm Tree Productions is a high-end video and photo production company based in Ålesund, Norway,
-founded in 2018 by Johannes Lovund. The studio produces music videos, live performance films,
-commercials, and fashion content for artists including Kygo, Sam Feldt, Frank Walker, and Martin
-Garrix & DubVision. Audience: prospective clients (artists, brands, agencies) and the wider creative
-industry, mainly on Instagram and LinkedIn. Content style: behind-the-scenes of real shoots, crew
-and gear spotlights, the fjord/Nordic setting as a visual signature, and craft-focused storytelling
-about how the work actually gets made - never generic "book us now" sales pitches.
+founded in 2018 as a joint venture between director Johannes Lovund and Kygo (the DJ/producer),
+dual-based in Ålesund, Norway and Miami, Florida. Focus: music videos, live productions, artist
+storytelling, and bold commercial/brand and fashion films - hands-on from shoot through final
+edit, valuing emotional depth and strong visual style over generic corporate polish. Real project
+credits to draw on (use these, don't invent client names): Kygo, Frank Walker, Joe Jonas, Shawn
+Mendes, Rita Ora, Dean Lewis, Jamie Foxx, and 50 Cent.
+Audience: prospective clients (artists, brands, agencies) and the wider creative/production
+industry, mainly on Instagram (@palmtree.productions) and LinkedIn.
+Content style: behind-the-scenes of real shoots, crew and gear spotlights, the contrast between
+the Ålesund/Nordic fjord setting and the Miami setting as a dual visual signature, and
+craft-focused storytelling about how the work actually gets made - never generic "book us now"
+sales pitches. Ideas should work for most shoots/projects, not one specific one - describe a
+reusable moment or technique (a lighting setup reveal, a rough-cut-vs-final comparison, a gear
+walkthrough) rather than naming one particular past shoot or client by name unless it's being
+used purely as a credibility reference, not the whole premise of the idea.
     `.trim(),
   "johannes-lovund":
     process.env.BRAND_CONTEXT_JOHANNES ||
     `
-Johannes Lovund is the founder and director of Palm Tree Productions, a video/photo production
-company based in Ålesund, Norway. This is his personal creator account, distinct from the company's
-own. Audience: other filmmakers, creative entrepreneurs, and people curious about the person behind
-the camera. Content style: personal, first-person, founder-voice storytelling - what it's actually
-like building an internationally-booked production company from a small Norwegian town, on-set
-decisions, travel between shoots, lessons learned. Should feel authentic, never corporate.
+Johannes Lovund is a director, producer, and photographer, and the co-founder & CEO of Palm Tree
+Productions (a joint venture with Kygo). He was ranked the #1 music photographer by EDMSauce.com
+readers (19,000 votes across 63 countries, out of 50 nominees) - a genuine, citable credibility
+marker, not a vague claim. From Ålesund, Norway; grounded small-town roots contrasted with a
+career shooting/directing globally for artists including Kygo, Frank Walker, Joe Jonas, Shawn
+Mendes, Rita Ora, Dean Lewis, Jamie Foxx, and 50 Cent.
+This is his PERSONAL creator account, distinct from the Palm Tree Productions company account.
+Audience: other filmmakers, photographers, and creative entrepreneurs, plus people curious about
+the person behind the camera - not primarily prospective clients (that's the company account's
+job). Content style: personal, first-person, founder/creator-voice storytelling - what it
+actually feels like directing and shooting globally-known artists while still being based in a
+small Norwegian town, the craft/eye behind the photography, on-set decisions, lessons learned.
+Should feel authentic and personal, never corporate. Ideas should work for most shoots/trips, not
+one specific one - describe a reusable moment, ritual, or reflection rather than naming one
+particular past session unless it's purely a credibility reference.
     `.trim(),
 };
 
@@ -441,6 +459,11 @@ For each phase, give 3-5 concrete content ideas specific to THIS song (use its t
 mood, don't be generic). Also write a short overall strategy summary (2-4 sentences) explaining
 the narrative arc across the phases.
 
+If it's genuinely useful, search the web for what's currently trending in short-form video
+generally, and use a currently-relevant format or sound where it's a natural fit for the song's
+mood - never force it. HARD RULE: never tie an idea to anything sensitive (a death, tragedy,
+disaster, or controversy) - skip trend references entirely rather than risk that.
+
 Respond with ONLY valid JSON with exactly this shape:
 {
   "strategySummary": "2-4 sentence overall strategy",
@@ -456,9 +479,10 @@ Respond with ONLY valid JSON with exactly this shape:
   ]
 }
 
-Do not include anything other than the JSON object itself - no markdown fences, no explanation text.`;
+Do not include anything other than the JSON object itself - no markdown fences, no explanation
+text. Write the final JSON as your last message, after any searching.`;
 
-  const text = await askClaude(prompt, 3000);
+  const text = await askClaudeWithSearch(prompt, 3500, 3);
   const plan = parseJsonFromClaude(text, "song release plan");
   if (!plan || !Array.isArray(plan.ideas)) {
     throw new Error("Claude's response was missing the expected 'ideas' list.");
