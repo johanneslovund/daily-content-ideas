@@ -22,7 +22,10 @@ services:
       # Restricts which origin may call the API from a browser (CORS)
       - ALLOWED_ORIGIN=https://ptp-internal.pages.dev
     volumes:
-      - ./data:/app/data
+      # Named volume, NOT a relative bind mount - the GitHub Actions runner checks
+      # this repo out fresh on every deploy (and cleans untracked files first), so
+      # a path relative to the checkout directory would get wiped on every push.
+      - content_ideas_data:/app/data
 
   cloudflared:
     build: ./cloudflared
@@ -58,3 +61,4 @@ services:
 
 volumes:
   runner_data:
+  content_ideas_data:
