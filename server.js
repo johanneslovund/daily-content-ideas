@@ -10,7 +10,7 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data", "ideas.db");
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
 const IDEAS_PER_BATCH = parseInt(process.env.IDEAS_PER_BATCH || "8", 10);
-const CAPTIONS_PER_BATCH = parseInt(process.env.CAPTIONS_PER_BATCH || "4", 10);
+const CAPTIONS_PER_BATCH = parseInt(process.env.CAPTIONS_PER_BATCH || "5", 10);
 // Cron format: min hour day month weekday, interpreted in CRON_TIMEZONE below.
 // Default: every day at 07:00 Norway time (auto-adjusts for daylight saving).
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || "0 7 * * *";
@@ -363,7 +363,7 @@ text. Write the final JSON as your last message, after any searching.`;
   return ideas.length;
 }
 
-async function generateCaptions({ ideaId, topic, category, count = 4 }) {
+async function generateCaptions({ ideaId, topic, category, count = CAPTIONS_PER_BATCH }) {
   requireAnthropic();
 
   let subjectContext;
@@ -791,7 +791,7 @@ app.post("/api/captions/generate", async (req, res) => {
       ideaId: ideaId || null,
       topic: topic || null,
       category: category || null,
-      count: parseInt(count, 10) || 4,
+      count: parseInt(count, 10) || CAPTIONS_PER_BATCH,
     });
     res.json({ ok: true, captions });
   } catch (e) {
