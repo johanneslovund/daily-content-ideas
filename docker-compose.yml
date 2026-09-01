@@ -15,7 +15,7 @@ services:
       # Cron: min hour day month weekday -> "0 7 * * *" = hver dag kl 07:00
       - CRON_SCHEDULE=0 7 * * *
       # Tilpass merkevare-konteksten idéene skal genereres ut fra
-      - BRAND_CONTEXT=Vi lager innhold for en tropical house / DJ-artist og festival-merkevaren "Palm Tree Music Festival". Malgruppe: unge, festival- og musikkinteresserte følgere på Instagram Reels, TikTok og YouTube Shorts. Stil: solfylt, tropisk, "disco palm tree"-visuell identitet, backstage/studio-glimt, festival-øyeblikk, samarbeid med andre artister, remix-drops, behind-the-scenes fra produksjon og turné.
+      - 'BRAND_CONTEXT=Vi lager innhold for en tropical house / DJ-artist og festival-merkevaren "Palm Tree Music Festival". Malgruppe: unge, festival- og musikkinteresserte følgere på Instagram Reels, TikTok og YouTube Shorts. Stil: solfylt, tropisk, "disco palm tree"-visuell identitet, backstage/studio-glimt, festival-øyeblikk, samarbeid med andre artister, remix-drops, behind-the-scenes fra produksjon og turné.'
       # Begrenser hvem som får kalle API-et fra nettleser (CORS)
       - ALLOWED_ORIGIN=https://ptp-internal.pages.dev
     volumes:
