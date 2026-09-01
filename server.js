@@ -126,6 +126,8 @@ db.exec(`
     description TEXT NOT NULL,
     format TEXT,
     why_it_works TEXT,
+    source_url TEXT,
+    source_name TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 `);
@@ -142,6 +144,8 @@ ensureColumn("ideas", "plan_id", "INTEGER");
 ensureColumn("ideas", "phase", "TEXT");
 ensureColumn("ideas", "favorited", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("captions", "category", "TEXT");
+ensureColumn("inspiration", "source_url", "TEXT");
+ensureColumn("inspiration", "source_name", "TEXT");
 
 const insertIdea = db.prepare(`
   INSERT INTO ideas (category, title, description, platform, hook, format, plan_id, phase)
@@ -154,8 +158,8 @@ const insertCaption = db.prepare(`
 `);
 
 const insertInspiration = db.prepare(`
-  INSERT INTO inspiration (category, title, description, format, why_it_works)
-  VALUES (@category, @title, @description, @format, @why_it_works)
+  INSERT INTO inspiration (category, title, description, format, why_it_works, source_url, source_name)
+  VALUES (@category, @title, @description, @format, @why_it_works, @source_url, @source_name)
 `);
 
 const insertPlan = db.prepare(`
@@ -174,6 +178,17 @@ function parseJsonFromClaude(text, label) {
   try {
     return JSON.parse(cleaned);
   } catch (e) {
+    // Claude sometimes wraps the JSON in a sentence or two, even when asked not to
+    // (more likely when web search is involved). Fall back to grabbing the outermost
+    // [...] or {...} block before giving up.
+    const match = cleaned.match(/[[{][\s\S]*[\]}]/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch (e2) {
+        // fall through to the original error below
+      }
+    }
     throw new Error(`Could not parse JSON from Claude (${label}): ${e.message}`);
   }
 }
@@ -187,6 +202,21 @@ async function askClaude(prompt, maxTokens = 2000) {
   const textBlock = response.content.find((b) => b.type === "text");
   if (!textBlock) throw new Error("No text in Claude's response.");
   return textBlock.text;
+}
+
+// For prompts that use the web search tool: Claude's content array can contain an
+// early "I'll search for..." text block before the search runs, so the FINAL text
+// block (after any search results) is the one with the actual answer.
+async function askClaudeWithSearch(prompt, maxTokens = 2000, maxSearches = 5) {
+  const response = await anthropic.messages.create({
+    model: MODEL,
+    max_tokens: maxTokens,
+    messages: [{ role: "user", content: prompt }],
+    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: maxSearches }],
+  });
+  const textBlocks = response.content.filter((b) => b.type === "text");
+  if (!textBlocks.length) throw new Error("No text in Claude's response.");
+  return textBlocks[textBlocks.length - 1].text;
 }
 
 async function generateIdeas(category, count = IDEAS_PER_BATCH) {
@@ -309,42 +339,55 @@ Do not include anything other than the JSON array itself - no markdown fences, n
   return captions;
 }
 
-// "Inspiration" deliberately asks Claude for generic, well-established content PATTERNS/FORMATS
-// that tend to perform well in this niche - not claims about specific real posts or creators,
-// which the model has no live way to verify. The UI labels this clearly as AI-suggested patterns.
+// "Inspiration" searches the live web for real, currently-circulating posts/moments in this
+// niche and cites a real source URL for each one - it does not invent examples. If search
+// doesn't turn up enough verifiable, on-topic results, it returns fewer items rather than
+// padding the list with anything unsourced.
 async function generateInspiration(category, count = 6) {
   requireAnthropic();
   const prompt = `${brandContextFor(category)}
 
-Describe ${count} short-form video content PATTERNS or FORMATS that commonly perform very well
-(go viral / get high engagement) in this general niche right now. Think in terms of reusable
-FORMAT TYPES (e.g. "unexpected genre-mashup reveal", "reaction stitch to a fan cover", "day-in-the-life
-told entirely through B-roll with no talking"), not specific real posts, videos, or creators you
-cannot verify are real. Then explain briefly why each pattern tends to work psychologically/structurally.
+Search the web for up to ${count} REAL, currently-circulating social media posts, clips, or
+short-form video moments that are relevant to this brand's niche and are getting strong
+engagement or being written about as trending/viral right now. This can include: the artist's
+own posts, other artists/DJs in the same niche, or fan-made content reacting to them.
+
+Rules:
+- Every item MUST be backed by something you actually found via search - a real article, post,
+  or page you can cite a URL for. Do not invent or reconstruct examples from memory alone.
+- If you can't find ${count} genuinely real, verifiable, on-topic examples, return fewer items.
+  Returning 2 real ones is better than padding to ${count} with anything unverified.
+- For each item, explain concretely why it's relevant/well-performing, and how the ideas behind
+  it could translate into a new piece of content for this brand.
 
 Respond with ONLY valid JSON, a list of objects with exactly these fields:
 [
   {
-    "title": "Short name for the pattern (max 8 words)",
-    "description": "1-3 sentences describing the format and how to apply it to this brand specifically",
+    "title": "Short name for this real post/moment (max 10 words)",
+    "description": "1-3 sentences on what it actually is and what's happening in it",
     "format": "e.g. Reaction, Duet/Stitch, POV, Countdown, Transformation, Storytime",
-    "whyItWorks": "1-2 sentences on why this pattern tends to drive engagement"
+    "whyItWorks": "1-2 sentences on why it's working, and how to adapt the idea for this brand",
+    "sourceUrl": "the real URL you found this via search",
+    "sourceName": "short name of the source, e.g. the platform or publication"
   }
 ]
 
-Do not include anything other than the JSON array itself - no markdown fences, no explanation text.`;
+Do not include anything other than the JSON array itself - no markdown fences, no explanation text.
+Write the final JSON as your last message, after any searching.`;
 
-  const text = await askClaude(prompt, 2200);
+  const text = await askClaudeWithSearch(prompt, 3000, 6);
   const items = parseJsonFromClaude(text, "inspiration");
 
   const insertMany = db.transaction((rows) => {
     for (const item of rows) {
       insertInspiration.run({
         category,
-        title: item.title || "Untitled pattern",
+        title: item.title || "Untitled",
         description: item.description || "",
         format: item.format || "",
         why_it_works: item.whyItWorks || "",
+        source_url: item.sourceUrl || null,
+        source_name: item.sourceName || null,
       });
     }
   });
