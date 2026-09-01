@@ -621,6 +621,66 @@ text. Write the final JSON as your last message, after any searching.`;
   return result;
 }
 
+async function generateMoreSongIdeas(planId, count = 3) {
+  requireAnthropic();
+  const plan = db.prepare(`SELECT * FROM song_release_plans WHERE id = ?`).get(planId);
+  if (!plan) throw new Error("Rollout plan not found.");
+  const existingIdeas = db.prepare(`SELECT title, phase FROM ideas WHERE plan_id = ? ORDER BY id ASC`).all(planId);
+  const existingList = existingIdeas.length
+    ? existingIdeas.map((i) => `- [${i.phase}] ${i.title}`).join("\n")
+    : "(none yet)";
+
+  const prompt = `${brandContextFor("kygo")}
+
+A song rollout plan already exists for:
+Song title: ${plan.song_title}
+Description: ${plan.song_description}
+Overall strategy: ${plan.strategy_summary || "(none)"}
+
+Ideas already in this plan (do not repeat these or anything too similar):
+${existingList}
+
+Generate ${count} NEW, additional content ideas for this rollout. Assign each to one of the
+three phases: "Teaser (pre-release)", "Release Day", or "Sustain (weeks after release)".
+
+Respond with ONLY valid JSON, a list of objects with exactly these fields:
+[
+  {
+    "phase": "Teaser (pre-release)" | "Release Day" | "Sustain (weeks after release)",
+    "title": "Short title (max 8 words)",
+    "description": "1-3 sentences explaining concretely what to film/create",
+    "platform": "Instagram Reels | TikTok | YouTube Shorts | All",
+    "hook": "Suggested first 1-3 seconds / hook line",
+    "format": "e.g. POV, Behind-the-scenes, Skit, Tutorial, Countdown, Duet/Collab, Storytime"
+  }
+]
+
+Do not include anything other than the JSON array itself - no markdown fences, no explanation text.`;
+
+  const text = await askClaude(prompt, 2000);
+  const newIdeas = parseJsonFromClaude(text, "more song ideas");
+
+  const insertMany = db.transaction((items) => {
+    for (const item of items) {
+      insertIdea.run({
+        category: "song-release-plan",
+        subcategory: null,
+        title: item.title || "Untitled",
+        description: item.description || "",
+        template: null,
+        platform: item.platform || "",
+        hook: item.hook || "",
+        format: item.format || "",
+        trend_note: null,
+        plan_id: planId,
+        phase: item.phase || "",
+      });
+    }
+  });
+  insertMany(newIdeas);
+  return newIdeas.length;
+}
+
 const app = express();
 // CORS: lets ptp-internal (a different origin) call this API.
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "";
@@ -691,6 +751,21 @@ app.post("/api/ideas/:id/used", (req, res) => {
 app.post("/api/ideas/:id/favorite", (req, res) => {
   const favorited = req.body?.favorited ? 1 : 0;
   db.prepare(`UPDATE ideas SET favorited = ? WHERE id = ?`).run(favorited, req.params.id);
+  res.json({ ok: true });
+});
+
+app.put("/api/ideas/:id", (req, res) => {
+  const existing = db.prepare(`SELECT * FROM ideas WHERE id = ?`).get(req.params.id);
+  if (!existing) return res.status(404).json({ ok: false, error: "Idea not found" });
+  const { title, description, hook, platform, format } = req.body || {};
+  db.prepare(`UPDATE ideas SET title = ?, description = ?, hook = ?, platform = ?, format = ? WHERE id = ?`).run(
+    title !== undefined ? title : existing.title,
+    description !== undefined ? description : existing.description,
+    hook !== undefined ? hook : existing.hook,
+    platform !== undefined ? platform : existing.platform,
+    format !== undefined ? format : existing.format,
+    req.params.id
+  );
   res.json({ ok: true });
 });
 
@@ -817,6 +892,16 @@ app.post("/api/song-release-plans/generate", async (req, res) => {
     }
     const planId = await generateSongReleasePlan(songTitle.trim(), songDescription.trim());
     res.json({ ok: true, planId });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post("/api/song-release-plans/:id/generate-more", async (req, res) => {
+  try {
+    const count = parseInt(req.body?.count, 10) || 3;
+    const n = await generateMoreSongIdeas(req.params.id, count);
+    res.json({ ok: true, generated: n });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
