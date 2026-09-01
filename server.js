@@ -106,6 +106,7 @@ db.exec(`
     format TEXT,
     used INTEGER NOT NULL DEFAULT 0,
     favorited INTEGER NOT NULL DEFAULT 0,
+    trend_note TEXT,
     plan_id INTEGER,
     phase TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -154,10 +155,11 @@ ensureColumn("ideas", "favorited", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("captions", "category", "TEXT");
 ensureColumn("inspiration", "source_url", "TEXT");
 ensureColumn("inspiration", "source_name", "TEXT");
+ensureColumn("ideas", "trend_note", "TEXT");
 
 const insertIdea = db.prepare(`
-  INSERT INTO ideas (category, title, description, platform, hook, format, plan_id, phase)
-  VALUES (@category, @title, @description, @platform, @hook, @format, @plan_id, @phase)
+  INSERT INTO ideas (category, title, description, platform, hook, format, trend_note, plan_id, phase)
+  VALUES (@category, @title, @description, @platform, @hook, @format, @trend_note, @plan_id, @phase)
 `);
 
 const insertCaption = db.prepare(`
@@ -243,6 +245,18 @@ studio/lifestyle ideas as a reusable moment or ritual, not a specific past sessi
 If it's genuinely useful, search the web first to check what his current/most recent single is,
 so a caption or hook can reference the right song by name - but keep the FILMING instructions
 themselves generic and reusable regardless of which song or show it ends up being used for.
+
+Also search for what's broadly going viral right now - not just in this niche, but trending
+sounds, memes, formats, and cultural moments across social media generally - and see if 1-2 of
+the ${count} ideas can genuinely and naturally tie into one of them (e.g. using a trending sound
+or format, riding a lighthearted meme). Only do this where the connection feels natural, not
+forced.
+HARD RULE: never tie an idea to anything sensitive - a death, tragedy, disaster, injury, illness,
+or controversy, celebrity or otherwise. Trend-jacking a tragedy for engagement is exactly the
+kind of thing that damages a brand rather than helping it. If the only trending topics you find
+are sensitive in nature, skip trend-tie-ins entirely for this batch and just write evergreen
+ideas instead - do not force a connection to something inappropriate.
+
 For the level of specificity expected in the FILMING instructions themselves (this is about
 concreteness of execution, not about naming specific past events):
 BAD (too vague to act on): "Post a clip of the artist in the studio working on new music."
@@ -257,14 +271,15 @@ Respond with ONLY valid JSON, a list of objects with exactly these fields:
     "description": "1-3 sentences explaining concretely what to film/create",
     "platform": "Instagram Reels | TikTok | YouTube Shorts | All",
     "hook": "Suggested first 1-3 seconds / hook line",
-    "format": "e.g. POV, Behind-the-scenes, Skit, Tutorial, Countdown, Duet/Collab, Storytime"
+    "format": "e.g. POV, Behind-the-scenes, Skit, Tutorial, Countdown, Duet/Collab, Storytime",
+    "trendNote": "if this idea rides a current trend, briefly name it (e.g. 'uses trending sound: [name]'); otherwise null"
   }
 ]
 
 Do not include anything other than the JSON array itself - no markdown fences, no explanation
 text. Write the final JSON as your last message, after any searching.`;
 
-  const text = await askClaudeWithSearch(prompt, 2500, 3);
+  const text = await askClaudeWithSearch(prompt, 2500, 5);
   const ideas = parseJsonFromClaude(text, "ideas");
 
   const insertMany = db.transaction((items) => {
@@ -276,6 +291,7 @@ text. Write the final JSON as your last message, after any searching.`;
         platform: item.platform || "",
         hook: item.hook || "",
         format: item.format || "",
+        trend_note: item.trendNote || null,
         plan_id: null,
         phase: null,
       });
@@ -463,6 +479,7 @@ Do not include anything other than the JSON object itself - no markdown fences, 
         platform: item.platform || "",
         hook: item.hook || "",
         format: item.format || "",
+        trend_note: null,
         plan_id: planId,
         phase: item.phase || "",
       });
