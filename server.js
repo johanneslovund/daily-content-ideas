@@ -26,20 +26,24 @@ tropical house genre, with hundreds of millions of streams and major festival he
 worldwide. Content for this tab is about Kygo the artist - his music, his live shows, and his
 lifestyle. Do NOT center ideas on his business ventures (Palm Tree Records, Palm Tree Crew, Palm
 Tree Music Festival) - those are separate brand/business concerns, not artist content.
-Recent output to draw on for specificity (use real song/collab names, don't invent new ones):
-"Save My Love" (feat. Khalid & Gryffin, Feb 2026) and "That's When You Know" (feat. Carter
-Faith, April 2026, a sun-kissed house/country-pop crossover).
-Shows: a recurring summer residency at Ushuaïa Ibiza, and a South America run that included
-Lollapalooza Argentina/Chile/Brazil plus a Lima headline show.
+Recurring, evergreen facts (still true regardless of the current date): he plays a recurring
+summer residency at Ushuaïa Ibiza; he tours and headlines major festivals worldwide; his sound
+blends tropical house with pop/vocal collaborations.
 Lifestyle/visual identity: tropical paradise and sunset imagery, a blend of laid-back luxury and
-high-energy festival euphoria, life on the road between shows, and (on recent tours) cloud/water/
-desert projection visuals during the set.
+high-energy festival euphoria, life on the road between shows.
 Audience: a huge international fanbase across Instagram, TikTok, and YouTube Shorts who respond
 to sun-drenched visuals, festival-mainstage energy, feel-good dance music, and glimpses of life
 on tour.
-Ideas must be concrete enough to actually film or produce within a few days, and should reference
-real, current specifics (an actual song or show) rather than generic "post more" advice or
-invented placeholder details.
+IMPORTANT - staying current: do not rely on any specific song, city, or tour stop from your
+training data or a past conversation - those go stale fast (a promo cycle ends, a tour moves on
+to the next city). Use the web search tool to check what his actual current/most recent single is
+and what shows are genuinely upcoming before writing ideas, and prefer ideas anchored to what's
+current or upcoming over anything already past. If a search doesn't turn up anything currently
+promotable, default to generic, evergreen show/lifestyle formats (soundcheck, life between shows,
+studio process, festival crowd energy) that don't depend on one specific place or moment and stay
+executable indefinitely going forward - never anchor an idea to a location or event that has
+already passed.
+Ideas must be concrete enough to actually film or produce within a few days.
     `.trim(),
   "palm-tree-productions":
     process.env.BRAND_CONTEXT_PTP ||
@@ -224,16 +228,23 @@ async function generateIdeas(category, count = IDEAS_PER_BATCH) {
   const prompt = `${brandContextFor(category)}
 
 Generate ${count} new, concrete short-form video content ideas (Reels/TikTok/Shorts) for this
-brand. Avoid repeating generic "show your studio life" suggestions - be specific.
+brand, executable moving forward from today. Avoid repeating generic "show your studio life"
+suggestions - be specific about WHAT TO FILM, even when the idea itself is a generic, evergreen
+format.
 
-Ground every idea in a real, specific detail already given above (an actual release, event,
-collaborator, or brand arm) rather than inventing placeholder specifics that weren't provided.
-For the level of specificity expected:
-BAD (too generic): "Post a clip of the artist in the studio working on new music."
-GOOD (grounded in a real, given detail): "Film the exact moment the drop hits in [a specific
-real track named above], played for the first time on someone's car speakers, captioned with
-their genuine reaction." - adapt this pattern to this brand's actual facts, don't reuse it
-verbatim.
+If it's genuinely useful, search the web first to check for anything current or upcoming (a
+recent release, an announced show) worth anchoring an idea to. But do NOT force every idea to
+reference a specific fact - most ideas should be generic, evergreen show/lifestyle/creative-
+process formats that don't depend on one place or moment and stay executable indefinitely. Only
+anchor an idea to a specific real detail if it is CURRENT or UPCOMING - never to something that
+has already happened or a promo cycle that has already ended (e.g. a city already toured through,
+a single no longer being actively promoted).
+For the level of specificity expected in the FILMING instructions themselves (this is about
+concreteness of execution, not about naming specific past events):
+BAD (too vague to act on): "Post a clip of the artist in the studio working on new music."
+GOOD (concrete and evergreen): "Film a single continuous take from the moment a new idea's first
+loop plays back for the first time, ending exactly on the artist's unfiltered reaction - no
+retakes, no cuts."
 
 Respond with ONLY valid JSON, a list of objects with exactly these fields:
 [
@@ -246,9 +257,10 @@ Respond with ONLY valid JSON, a list of objects with exactly these fields:
   }
 ]
 
-Do not include anything other than the JSON array itself - no markdown fences, no explanation text.`;
+Do not include anything other than the JSON array itself - no markdown fences, no explanation
+text. Write the final JSON as your last message, after any searching.`;
 
-  const text = await askClaude(prompt, 2000);
+  const text = await askClaudeWithSearch(prompt, 2500, 3);
   const ideas = parseJsonFromClaude(text, "ideas");
 
   const insertMany = db.transaction((items) => {
