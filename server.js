@@ -119,6 +119,7 @@ db.exec(`
     category TEXT NOT NULL DEFAULT 'kygo',
     title TEXT NOT NULL,
     description TEXT NOT NULL,
+    template TEXT,
     platform TEXT,
     hook TEXT,
     format TEXT,
@@ -174,10 +175,11 @@ ensureColumn("captions", "category", "TEXT");
 ensureColumn("inspiration", "source_url", "TEXT");
 ensureColumn("inspiration", "source_name", "TEXT");
 ensureColumn("ideas", "trend_note", "TEXT");
+ensureColumn("ideas", "template", "TEXT");
 
 const insertIdea = db.prepare(`
-  INSERT INTO ideas (category, title, description, platform, hook, format, trend_note, plan_id, phase)
-  VALUES (@category, @title, @description, @platform, @hook, @format, @trend_note, @plan_id, @phase)
+  INSERT INTO ideas (category, title, description, template, platform, hook, format, trend_note, plan_id, phase)
+  VALUES (@category, @title, @description, @template, @platform, @hook, @format, @trend_note, @plan_id, @phase)
 `);
 
 const insertCaption = db.prepare(`
@@ -282,11 +284,20 @@ GOOD (concrete and evergreen): "Film a single continuous take from the moment a 
 loop plays back for the first time, ending exactly on the artist's unfiltered reaction - no
 retakes, no cuts."
 
+Also write each idea as a reusable, fill-in-the-blank TEMPLATE, separate from the concrete
+description - the abstracted formula behind the idea, with the swappable parts in [brackets], so
+it can be reused again later with different specifics. Example pairing:
+description: "Film the exact moment the drop hits in the new single, played for the first time
+on someone's car speakers, captioned with their genuine reaction."
+template: "Play [a specific track] for [someone] on [an everyday speaker/setting] for the first
+time → hold on their unfiltered reaction → caption with what they said, verbatim."
+
 Respond with ONLY valid JSON, a list of objects with exactly these fields:
 [
   {
     "title": "Short title (max 8 words)",
     "description": "1-3 sentences explaining concretely what to film/create",
+    "template": "The reusable fill-in-the-blank formula behind this idea, with [bracketed] parts",
     "platform": "Instagram Reels | TikTok | YouTube Shorts | All",
     "hook": "Suggested first 1-3 seconds / hook line",
     "format": "e.g. POV, Behind-the-scenes, Skit, Tutorial, Countdown, Duet/Collab, Storytime",
@@ -297,7 +308,7 @@ Respond with ONLY valid JSON, a list of objects with exactly these fields:
 Do not include anything other than the JSON array itself - no markdown fences, no explanation
 text. Write the final JSON as your last message, after any searching.`;
 
-  const text = await askClaudeWithSearch(prompt, 2500, 5);
+  const text = await askClaudeWithSearch(prompt, 2800, 5);
   const ideas = parseJsonFromClaude(text, "ideas");
 
   const insertMany = db.transaction((items) => {
@@ -306,6 +317,7 @@ text. Write the final JSON as your last message, after any searching.`;
         category,
         title: item.title || "Untitled",
         description: item.description || "",
+        template: item.template || null,
         platform: item.platform || "",
         hook: item.hook || "",
         format: item.format || "",
@@ -500,6 +512,7 @@ text. Write the final JSON as your last message, after any searching.`;
         category: "song-release-plan",
         title: item.title || "Untitled",
         description: item.description || "",
+        template: null,
         platform: item.platform || "",
         hook: item.hook || "",
         format: item.format || "",
