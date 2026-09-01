@@ -22,10 +22,14 @@ services:
       - ./data:/app/data
 
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    build: ./cloudflared
     container_name: cloudflared-content-ideas
     restart: unless-stopped
-    # TUNNEL_TOKEN settes som miljøvariabel i Portainer (Stacks > Environment variables) - ikke her i koden.
-    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    environment:
+      - TARGET_URL=http://daily-content-ideas:3060
+      - REPORT_URL=https://ptp-internal.pages.dev/api/content-ideas-url
+      # Delt hemmelighet - samme verdi som Cloudflare Pages secret TUNNEL_UPDATE_SECRET
+      # (satt via: npx wrangler pages secret put TUNNEL_UPDATE_SECRET). IKKE i koden.
+      - TUNNEL_UPDATE_SECRET=${TUNNEL_UPDATE_SECRET}
     depends_on:
       - daily-content-ideas
