@@ -1,0 +1,16 @@
+name: Deploy to NAS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rebuild and restart daily-content-ideas + cloudflared
+        run: |
+          docker compose up -d --build daily-content-ideas cloudflared

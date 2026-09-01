@@ -36,3 +36,25 @@ services:
       - TUNNEL_UPDATE_SECRET=${TUNNEL_UPDATE_SECRET}
     depends_on:
       - daily-content-ideas
+
+  # Self-hosted GitHub Actions runner: lets pushes to the repo auto-rebuild and
+  # restart the daily-content-ideas / cloudflared services above, with no manual
+  # Portainer "pull and redeploy" step. Registers itself once (using RUNNER_TOKEN,
+  # a short-lived one-time token) and persists its credentials in runner_data, so
+  # it never needs a new token again unless that volume is wiped.
+  runner:
+    build: ./runner
+    container_name: gh-runner-content-ideas
+    restart: unless-stopped
+    environment:
+      - REPO_URL=https://github.com/johanneslovund/daily-content-ideas
+      # One-time registration token (expires ~1 hour after issue). Only needed
+      # the first time this container starts; ignored afterwards.
+      - RUNNER_TOKEN=${GH_RUNNER_TOKEN}
+      - RUNNER_NAME=nas-daily-content-ideas
+    volumes:
+      - runner_data:/actions-runner
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  runner_data:
