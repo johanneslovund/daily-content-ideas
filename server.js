@@ -260,6 +260,24 @@ function looksLikeJson(text) {
   return /[[{][\s\S]*[\]}]/.test(text.trim());
 }
 
+// Temporary diagnostics for a search-generation bug: captures a summary of each
+// turn's raw content blocks so it can be inspected via GET /api/debug/last-search
+// without needing shell access to the container. Safe to leave in - no secrets,
+// small ring buffer.
+const searchDebugLog = [];
+function recordSearchDebug(label, response) {
+  searchDebugLog.push({
+    at: new Date().toISOString(),
+    label,
+    stop_reason: response.stop_reason,
+    blocks: response.content.map((b) => ({
+      type: b.type,
+      preview: b.type === "text" ? b.text.slice(0, 300) : b.type === "server_tool_use" ? JSON.stringify(b.input) : undefined,
+    })),
+  });
+  while (searchDebugLog.length > 20) searchDebugLog.shift();
+}
+
 // For prompts that use the web search tool. Two failure modes this guards against:
 // 1. A long search sequence can make the API pause the turn mid-work (stop_reason
 //    "pause_turn") before Claude ever writes the final answer - we resend the paused
@@ -274,10 +292,12 @@ async function askClaudeWithSearch(prompt, maxTokens = 2000, maxSearches = 5) {
 
   async function runTurn() {
     let response = await anthropic.messages.create({ model: MODEL, max_tokens: maxTokens, messages, tools });
+    recordSearchDebug("turn", response);
     let loops = 0;
     while (response.stop_reason === "pause_turn" && loops < 5) {
       messages.push({ role: "assistant", content: response.content });
       response = await anthropic.messages.create({ model: MODEL, max_tokens: maxTokens, messages, tools });
+      recordSearchDebug("pause_turn continuation", response);
       loops++;
     }
     if (response.stop_reason === "max_tokens") {
@@ -945,6 +965,10 @@ app.delete("/api/song-release-plans/:id", (req, res) => {
 
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, hasApiKey: !!ANTHROPIC_API_KEY, cron: CRON_SCHEDULE, cronTimezone: CRON_TIMEZONE, categories: CATEGORIES });
+});
+
+app.get("/api/debug/last-search", (req, res) => {
+  res.json(searchDebugLog);
 });
 
 if (ANTHROPIC_API_KEY) {
