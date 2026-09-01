@@ -26,23 +26,27 @@ tropical house genre, with hundreds of millions of streams and major festival he
 worldwide. Content for this tab is about Kygo the artist - his music, his live shows, and his
 lifestyle. Do NOT center ideas on his business ventures (Palm Tree Records, Palm Tree Crew, Palm
 Tree Music Festival) - those are separate brand/business concerns, not artist content.
-Recurring, evergreen facts (still true regardless of the current date): he plays a recurring
-summer residency at Ushuaïa Ibiza; he tours and headlines major festivals worldwide; his sound
-blends tropical house with pop/vocal collaborations.
+Evergreen facts (still true regardless of the current date): he tours and headlines major
+festivals, club nights, and residencies worldwide - the specific venues and dates change
+constantly, so none of them should be treated as a fixed, reusable anchor. His sound blends
+tropical house with pop/vocal collaborations.
 Lifestyle/visual identity: tropical paradise and sunset imagery, a blend of laid-back luxury and
 high-energy festival euphoria, life on the road between shows.
 Audience: a huge international fanbase across Instagram, TikTok, and YouTube Shorts who respond
 to sun-drenched visuals, festival-mainstage energy, feel-good dance music, and glimpses of life
 on tour.
+IMPORTANT - do not name a specific venue, city, residency, or show: even ones that seem
+recurring change lineup, dates, or stop happening entirely, and a named show goes stale the
+moment it's over. Write show-related ideas so they work at WHATEVER show is happening next -
+phrase filming instructions generically ("at the next show", "backstage before walking out",
+"the closing track of the set") rather than naming a place. The same applies to studio/lifestyle
+content: describe a reusable moment or process (a first-listen reaction, packing for the next
+trip, a soundcheck ritual), not a specific past session or trip.
 IMPORTANT - staying current: do not rely on any specific song, city, or tour stop from your
-training data or a past conversation - those go stale fast (a promo cycle ends, a tour moves on
-to the next city). Use the web search tool to check what his actual current/most recent single is
-and what shows are genuinely upcoming before writing ideas, and prefer ideas anchored to what's
-current or upcoming over anything already past. If a search doesn't turn up anything currently
-promotable, default to generic, evergreen show/lifestyle formats (soundcheck, life between shows,
-studio process, festival crowd energy) that don't depend on one specific place or moment and stay
-executable indefinitely going forward - never anchor an idea to a location or event that has
-already passed.
+training data or a past conversation - those go stale fast. If it's genuinely useful, use the
+web search tool to check what his actual current/most recent single is before writing ideas, and
+prefer ideas anchored to what's current over anything already past - but even then, keep the
+filming instructions themselves generic and reusable rather than tied to one specific event.
 Ideas must be concrete enough to actually film or produce within a few days.
     `.trim(),
   "palm-tree-productions":
@@ -232,13 +236,13 @@ brand, executable moving forward from today. Avoid repeating generic "show your 
 suggestions - be specific about WHAT TO FILM, even when the idea itself is a generic, evergreen
 format.
 
-If it's genuinely useful, search the web first to check for anything current or upcoming (a
-recent release, an announced show) worth anchoring an idea to. But do NOT force every idea to
-reference a specific fact - most ideas should be generic, evergreen show/lifestyle/creative-
-process formats that don't depend on one place or moment and stay executable indefinitely. Only
-anchor an idea to a specific real detail if it is CURRENT or UPCOMING - never to something that
-has already happened or a promo cycle that has already ended (e.g. a city already toured through,
-a single no longer being actively promoted).
+Ideas should work for MOST shows, studio sessions, or lifestyle moments, not one specific one -
+never name a specific venue, city, or date. Write show ideas so they're just as usable at
+whatever show comes up next ("backstage before walking out", "the last track of the set"), and
+studio/lifestyle ideas as a reusable moment or ritual, not a specific past session or trip.
+If it's genuinely useful, search the web first to check what his current/most recent single is,
+so a caption or hook can reference the right song by name - but keep the FILMING instructions
+themselves generic and reusable regardless of which song or show it ends up being used for.
 For the level of specificity expected in the FILMING instructions themselves (this is about
 concreteness of execution, not about naming specific past events):
 BAD (too vague to act on): "Post a clip of the artist in the studio working on new music."
