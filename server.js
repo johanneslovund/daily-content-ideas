@@ -259,13 +259,28 @@ async function askClaude(prompt, maxTokens = 2000) {
 // For prompts that use the web search tool: Claude's content array can contain an
 // early "I'll search for..." text block before the search runs, so the FINAL text
 // block (after any search results) is the one with the actual answer.
+//
+// A long search sequence can also make the API pause the turn mid-work
+// (stop_reason "pause_turn") before Claude ever writes the final answer - if that
+// happens we must send the paused assistant content back and continue, or we end up
+// grabbing an intermediate "I now have enough info to..." narration block instead of
+// the real JSON. Anthropic's docs say to resend the paused assistant message unchanged.
 async function askClaudeWithSearch(prompt, maxTokens = 2000, maxSearches = 5) {
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: maxTokens,
-    messages: [{ role: "user", content: prompt }],
-    tools: [{ type: "web_search_20250305", name: "web_search", max_uses: maxSearches }],
-  });
+  const messages = [{ role: "user", content: prompt }];
+  const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: maxSearches }];
+  let response = await anthropic.messages.create({ model: MODEL, max_tokens: maxTokens, messages, tools });
+
+  let loops = 0;
+  while (response.stop_reason === "pause_turn" && loops < 5) {
+    messages.push({ role: "assistant", content: response.content });
+    response = await anthropic.messages.create({ model: MODEL, max_tokens: maxTokens, messages, tools });
+    loops++;
+  }
+
+  if (response.stop_reason === "max_tokens") {
+    throw new Error("Claude's response was cut off before finishing (hit the token limit) - try again.");
+  }
+
   const textBlocks = response.content.filter((b) => b.type === "text");
   if (!textBlocks.length) throw new Error("No text in Claude's response.");
   return textBlocks[textBlocks.length - 1].text;
