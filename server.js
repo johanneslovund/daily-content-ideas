@@ -23,11 +23,33 @@ const BRAND_CONTEXTS = {
     `
 Kygo (Kyrre Gørvell-Dahll) is a globally renowned Norwegian DJ, producer, and pioneer of the
 tropical house genre, with hundreds of millions of streams and major festival headline slots
-worldwide. Audience: a huge international fanbase across Instagram, TikTok, and YouTube Shorts
-who respond to sun-drenched visuals, festival-mainstage energy, and feel-good dance music.
-Content style: tropical/sunset aesthetics, big-name collaborations, remix drops, behind-the-scenes
-studio and tour footage, festival crowd moments. Ideas must be concrete enough to actually film or
-produce within a few days - not generic "post more" advice.
+worldwide. He is no longer just a touring DJ - he runs a full "Palm Tree" ecosystem:
+- Palm Tree Records: his own record label (partnered with Sony Music, co-founded with his
+  longtime manager Myles Shear) signing and developing new artists.
+- Palm Tree Crew: his lifestyle/entertainment brand - limited-edition fashion drops (e.g. with
+  Duvin), a pink/teal Miami-inspired visual palette, palm tree decal branding, and a recent
+  expansion into a 480-unit residential complex in Miami.
+- Palm Tree Music Festival: his own touring festival, with stops including the Hamptons
+  (Shinnecock Nation, running for years) and Napa (headlined with Zedd, alongside acts like
+  Disclosure, Frank Walker, and Gryffin).
+NOTE: this "Palm Tree" branding is Kygo's own - do not confuse it with Palm Tree Productions,
+the separate Norwegian video/photo production company (a client-vendor relationship, not the
+same entity); never write ideas that promote Palm Tree Productions on this tab.
+Recent output to draw on for specificity (use real song/collab names, don't invent new ones):
+"Save My Love" (feat. Khalid & Gryffin, Feb 2026) and "That's When You Know" (feat. Carter
+Faith, April 2026, a sun-kissed house/country-pop crossover). He also plays a recurring summer
+residency at Ushuaïa Ibiza and just wrapped a South America run (Lollapalooza Argentina/Chile/
+Brazil, plus a Lima headline show).
+Visual identity: tropical paradise and sunset imagery, palm trees, the Palm Tree Crew pink/teal
+Miami palette, a blend of laid-back luxury and high-energy euphoria, and (on recent tours)
+cloud/water/desert projection visuals during the set.
+Audience: a huge international fanbase across Instagram, TikTok, and YouTube Shorts who respond
+to sun-drenched visuals, festival-mainstage energy, and feel-good dance music - plus a growing
+segment interested in Palm Tree Records' new artists and the festival brand itself, not just Kygo
+as a solo DJ.
+Ideas must be concrete enough to actually film or produce within a few days, and should reference
+real, current specifics (an actual song, festival date, or brand arm) rather than generic
+"post more" advice or invented placeholder details.
     `.trim(),
   "palm-tree-productions":
     process.env.BRAND_CONTEXT_PTP ||
@@ -181,6 +203,15 @@ async function generateIdeas(category, count = IDEAS_PER_BATCH) {
 
 Generate ${count} new, concrete short-form video content ideas (Reels/TikTok/Shorts) for this
 brand. Avoid repeating generic "show your studio life" suggestions - be specific.
+
+Ground every idea in a real, specific detail already given above (an actual release, event,
+collaborator, or brand arm) rather than inventing placeholder specifics that weren't provided.
+For the level of specificity expected:
+BAD (too generic): "Post a clip of the artist in the studio working on new music."
+GOOD (grounded in a real, given detail): "Film the exact moment the drop hits in [a specific
+real track named above], played for the first time on someone's car speakers, captioned with
+their genuine reaction." - adapt this pattern to this brand's actual facts, don't reuse it
+verbatim.
 
 Respond with ONLY valid JSON, a list of objects with exactly these fields:
 [
