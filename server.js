@@ -21,35 +21,25 @@ const BRAND_CONTEXTS = {
   "kygo":
     process.env.BRAND_CONTEXT_KYGO ||
     `
-Kygo (Kyrre Gørvell-Dahll) is a globally renowned Norwegian DJ, producer, and pioneer of the
+Kygo (Kyrre Gørvell-Dahll) is a globally renowned Norwegian DJ and producer, and pioneer of the
 tropical house genre, with hundreds of millions of streams and major festival headline slots
-worldwide. He is no longer just a touring DJ - he runs a full "Palm Tree" ecosystem:
-- Palm Tree Records: his own record label (partnered with Sony Music, co-founded with his
-  longtime manager Myles Shear) signing and developing new artists.
-- Palm Tree Crew: his lifestyle/entertainment brand - limited-edition fashion drops (e.g. with
-  Duvin), a pink/teal Miami-inspired visual palette, palm tree decal branding, and a recent
-  expansion into a 480-unit residential complex in Miami.
-- Palm Tree Music Festival: his own touring festival, with stops including the Hamptons
-  (Shinnecock Nation, running for years) and Napa (headlined with Zedd, alongside acts like
-  Disclosure, Frank Walker, and Gryffin).
-NOTE: this "Palm Tree" branding is Kygo's own - do not confuse it with Palm Tree Productions,
-the separate Norwegian video/photo production company (a client-vendor relationship, not the
-same entity); never write ideas that promote Palm Tree Productions on this tab.
+worldwide. Content for this tab is about Kygo the artist - his music, his live shows, and his
+lifestyle. Do NOT center ideas on his business ventures (Palm Tree Records, Palm Tree Crew, Palm
+Tree Music Festival) - those are separate brand/business concerns, not artist content.
 Recent output to draw on for specificity (use real song/collab names, don't invent new ones):
 "Save My Love" (feat. Khalid & Gryffin, Feb 2026) and "That's When You Know" (feat. Carter
-Faith, April 2026, a sun-kissed house/country-pop crossover). He also plays a recurring summer
-residency at Ushuaïa Ibiza and just wrapped a South America run (Lollapalooza Argentina/Chile/
-Brazil, plus a Lima headline show).
-Visual identity: tropical paradise and sunset imagery, palm trees, the Palm Tree Crew pink/teal
-Miami palette, a blend of laid-back luxury and high-energy euphoria, and (on recent tours)
-cloud/water/desert projection visuals during the set.
+Faith, April 2026, a sun-kissed house/country-pop crossover).
+Shows: a recurring summer residency at Ushuaïa Ibiza, and a South America run that included
+Lollapalooza Argentina/Chile/Brazil plus a Lima headline show.
+Lifestyle/visual identity: tropical paradise and sunset imagery, a blend of laid-back luxury and
+high-energy festival euphoria, life on the road between shows, and (on recent tours) cloud/water/
+desert projection visuals during the set.
 Audience: a huge international fanbase across Instagram, TikTok, and YouTube Shorts who respond
-to sun-drenched visuals, festival-mainstage energy, and feel-good dance music - plus a growing
-segment interested in Palm Tree Records' new artists and the festival brand itself, not just Kygo
-as a solo DJ.
+to sun-drenched visuals, festival-mainstage energy, feel-good dance music, and glimpses of life
+on tour.
 Ideas must be concrete enough to actually film or produce within a few days, and should reference
-real, current specifics (an actual song, festival date, or brand arm) rather than generic
-"post more" advice or invented placeholder details.
+real, current specifics (an actual song or show) rather than generic "post more" advice or
+invented placeholder details.
     `.trim(),
   "palm-tree-productions":
     process.env.BRAND_CONTEXT_PTP ||
@@ -107,6 +97,7 @@ db.exec(`
     hook TEXT,
     format TEXT,
     used INTEGER NOT NULL DEFAULT 0,
+    favorited INTEGER NOT NULL DEFAULT 0,
     plan_id INTEGER,
     phase TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -149,6 +140,7 @@ function ensureColumn(table, column, definition) {
 ensureColumn("ideas", "category", "TEXT NOT NULL DEFAULT 'kygo'");
 ensureColumn("ideas", "plan_id", "INTEGER");
 ensureColumn("ideas", "phase", "TEXT");
+ensureColumn("ideas", "favorited", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("captions", "category", "TEXT");
 
 const insertIdea = db.prepare(`
@@ -278,21 +270,23 @@ ${subjectContext}
 
 Write ${count} different caption suggestions for this post.
 Requirements:
-- They must feel PERSONAL - written in first person, as if the account owner wrote it themselves,
-  not a marketing department. Avoid generic phrases like "Check this out!" or "New content out now!".
+- SHORT AND PRECISE - 1-2 sentences, rarely 3. Every word must earn its place. No filler, no
+  wall of text.
+- They must still feel PERSONAL - written in first person, as if the account owner wrote it
+  themselves, not a marketing department. Avoid generic phrases like "Check this out!" or "New
+  content out now!".
 - They must be written to drive ENGAGEMENT - use techniques like a genuine question to followers,
   a small cliffhanger/unfinished thought, a vulnerable/honest detail, or something that invites
   comments (disagreement, "tag someone who...", "who else relates", etc.) - vary the technique
   between suggestions.
-- Natural length for short-form video captions (typically 1-4 sentences, not a wall of text).
 - Use emojis sparingly and naturally, not in every sentence.
-- Include 3-6 relevant hashtags at the end of each caption, relevant to the niche - don't overdo it.
+- Do NOT include hashtags of any kind.
 - Give each suggestion a short style label explaining the technique, e.g. "Honest/vulnerable",
   "Question to followers", "Cliffhanger", "Bold claim", "Storytime".
 
 Respond with ONLY valid JSON, a list of objects with exactly these fields:
 [
-  { "label": "Short style label", "text": "The caption text itself incl. hashtags" }
+  { "label": "Short style label", "text": "The caption text itself - no hashtags" }
 ]
 
 Do not include anything other than the JSON array itself - no markdown fences, no explanation text.`;
@@ -429,11 +423,21 @@ app.use(express.static(path.join(__dirname, "public")));
 
 // ---- Ideas ----
 app.get("/api/ideas", (req, res) => {
-  const showUsed = req.query.used === "1";
   const category = req.query.category;
   if (category && !isValidCategory(category) && category !== "song-release-plan") {
     return res.status(400).json({ error: "Invalid category" });
   }
+  // Favorites are shown regardless of used state - they persist until manually
+  // unfavorited or deleted, independent of the new/used workflow.
+  if (req.query.favorited === "1") {
+    const rows = category
+      ? db
+          .prepare(`SELECT * FROM ideas WHERE favorited = 1 AND category = ? ORDER BY created_at DESC LIMIT 200`)
+          .all(category)
+      : db.prepare(`SELECT * FROM ideas WHERE favorited = 1 ORDER BY created_at DESC LIMIT 200`).all();
+    return res.json(rows);
+  }
+  const showUsed = req.query.used === "1";
   const rows = category
     ? db
         .prepare(`SELECT * FROM ideas WHERE used = ? AND category = ? ORDER BY created_at DESC LIMIT 200`)
@@ -459,6 +463,12 @@ app.post("/api/ideas/generate", async (req, res) => {
 app.post("/api/ideas/:id/used", (req, res) => {
   const used = req.body?.used ? 1 : 0;
   db.prepare(`UPDATE ideas SET used = ? WHERE id = ?`).run(used, req.params.id);
+  res.json({ ok: true });
+});
+
+app.post("/api/ideas/:id/favorite", (req, res) => {
+  const favorited = req.body?.favorited ? 1 : 0;
+  db.prepare(`UPDATE ideas SET favorited = ? WHERE id = ?`).run(favorited, req.params.id);
   res.json({ ok: true });
 });
 
