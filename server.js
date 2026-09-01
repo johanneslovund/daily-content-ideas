@@ -10,8 +10,10 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data", "ideas.db");
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
 const IDEAS_PER_BATCH = parseInt(process.env.IDEAS_PER_BATCH || "8", 10);
-// Cron format: min hour day month weekday. Default: every day at 07:00 server time.
+// Cron format: min hour day month weekday, interpreted in CRON_TIMEZONE below.
+// Default: every day at 07:00 Norway time (auto-adjusts for daylight saving).
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || "0 7 * * *";
+const CRON_TIMEZONE = process.env.CRON_TIMEZONE || "Europe/Oslo";
 
 // ---- Brand contexts: one per tab. Override any of these via env vars if the
 // details ever change; defaults reflect the real Palm Tree Productions setup. ----
@@ -691,16 +693,20 @@ app.delete("/api/song-release-plans/:id", (req, res) => {
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: true, hasApiKey: !!ANTHROPIC_API_KEY, cron: CRON_SCHEDULE, categories: CATEGORIES });
+  res.json({ ok: true, hasApiKey: !!ANTHROPIC_API_KEY, cron: CRON_SCHEDULE, cronTimezone: CRON_TIMEZONE, categories: CATEGORIES });
 });
 
 if (ANTHROPIC_API_KEY) {
-  cron.schedule(CRON_SCHEDULE, () => {
-    for (const category of CATEGORIES) {
-      generateIdeas(category).catch((e) => console.error(`Cron generation failed for ${category}:`, e.message));
-    }
-  });
-  console.log(`Cron set up: generates ${IDEAS_PER_BATCH} ideas per category (${CATEGORIES.join(", ")}) on schedule "${CRON_SCHEDULE}"`);
+  cron.schedule(
+    CRON_SCHEDULE,
+    () => {
+      for (const category of CATEGORIES) {
+        generateIdeas(category).catch((e) => console.error(`Cron generation failed for ${category}:`, e.message));
+      }
+    },
+    { timezone: CRON_TIMEZONE }
+  );
+  console.log(`Cron set up: generates ${IDEAS_PER_BATCH} ideas per category (${CATEGORIES.join(", ")}) on schedule "${CRON_SCHEDULE}" (${CRON_TIMEZONE})`);
 } else {
   console.warn("ANTHROPIC_API_KEY is missing - automatic generation is off. Set it in .env.");
 }

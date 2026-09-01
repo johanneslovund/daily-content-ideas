@@ -12,8 +12,10 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - CLAUDE_MODEL=claude-sonnet-4-6
       - IDEAS_PER_BATCH=8
-      # Cron: min hour day month weekday -> "0 7 * * *" = every day at 07:00
+      # Cron: min hour day month weekday, interpreted in CRON_TIMEZONE below.
+      # "0 7 * * *" = every day at 07:00 Norway time (auto-adjusts for DST).
       - CRON_SCHEDULE=0 7 * * *
+      - CRON_TIMEZONE=Europe/Oslo
       # Per-tab brand context has sensible defaults baked into server.js (Kygo,
       # Palm Tree Productions, Johannes Lovund). Override any of them here if needed:
       # - BRAND_CONTEXT_KYGO=...

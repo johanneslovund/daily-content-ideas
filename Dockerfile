@@ -1,7 +1,8 @@
 FROM node:20-alpine
 
-# better-sqlite3 trenger build-verktøy for å kompileres på Alpine
-RUN apk add --no-cache python3 make g++
+# better-sqlite3 trenger build-verktøy for å kompileres på Alpine.
+# tzdata is needed for the cron job's timezone-aware scheduling (Europe/Oslo).
+RUN apk add --no-cache python3 make g++ tzdata
 
 WORKDIR /app
 
