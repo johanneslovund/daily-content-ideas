@@ -10,6 +10,7 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data", "ideas.db");
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
 const MODEL = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
 const IDEAS_PER_BATCH = parseInt(process.env.IDEAS_PER_BATCH || "8", 10);
+const CAPTIONS_PER_BATCH = parseInt(process.env.CAPTIONS_PER_BATCH || "4", 10);
 // Cron format: min hour day month weekday, interpreted in CRON_TIMEZONE below.
 // Default: every day at 07:00 Norway time (auto-adjusts for daylight saving).
 const CRON_SCHEDULE = process.env.CRON_SCHEDULE || "0 7 * * *";
@@ -154,9 +155,11 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     idea_id INTEGER,
     category TEXT,
+    subcategory TEXT,
     topic TEXT,
     label TEXT NOT NULL,
     text TEXT NOT NULL,
+    favorited INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     FOREIGN KEY(idea_id) REFERENCES ideas(id) ON DELETE CASCADE
   );
@@ -188,6 +191,8 @@ ensureColumn("ideas", "plan_id", "INTEGER");
 ensureColumn("ideas", "phase", "TEXT");
 ensureColumn("ideas", "favorited", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("captions", "category", "TEXT");
+ensureColumn("captions", "subcategory", "TEXT");
+ensureColumn("captions", "favorited", "INTEGER NOT NULL DEFAULT 0");
 ensureColumn("inspiration", "source_url", "TEXT");
 ensureColumn("inspiration", "source_name", "TEXT");
 ensureColumn("ideas", "trend_note", "TEXT");
@@ -200,8 +205,8 @@ const insertIdea = db.prepare(`
 `);
 
 const insertCaption = db.prepare(`
-  INSERT INTO captions (idea_id, category, topic, label, text)
-  VALUES (@idea_id, @category, @topic, @label, @text)
+  INSERT INTO captions (idea_id, category, subcategory, topic, label, text)
+  VALUES (@idea_id, @category, @subcategory, @topic, @label, @text)
 `);
 
 const insertInspiration = db.prepare(`
@@ -413,11 +418,13 @@ Do not include anything other than the JSON array itself - no markdown fences, n
   const text = await askClaude(prompt, 1500);
   const captions = parseJsonFromClaude(text, "captions");
 
+  const effectiveSubcategory = idea ? idea.subcategory || null : null;
   const insertMany = db.transaction((items) => {
     for (const item of items) {
       insertCaption.run({
         idea_id: ideaId || null,
         category: effectiveCategory,
+        subcategory: effectiveSubcategory,
         topic: ideaId ? null : topic.trim(),
         label: item.label || "Suggestion",
         text: item.text || "",
@@ -426,6 +433,65 @@ Do not include anything other than the JSON array itself - no markdown fences, n
   });
   insertMany(captions);
   return captions;
+}
+
+// Standalone, subcategory-scoped captions: not tied to one specific idea or user-provided
+// topic - each caption imagines its own plausible, evergreen scenario within the subcategory,
+// so the batch reads as ready-to-grab caption starters rather than one caption for one post.
+async function generateSubcategoryCaptions(category, subcategory, count = CAPTIONS_PER_BATCH) {
+  requireAnthropic();
+  if (!isValidSubcategory(category, subcategory)) {
+    throw new Error("Invalid subcategory for this category.");
+  }
+  const prompt = `${brandContextFor(category)}
+
+Write ${count} standalone caption ideas for the "${subcategory}" content subcategory:
+${SUBCATEGORIES[category][subcategory]}
+
+Each caption should imagine its own plausible, evergreen scenario within this subcategory (don't
+reuse the same scenario twice) - something generic enough to pair with a real post later, not
+tied to one specific past event, date, or venue.
+
+Requirements:
+- SHORT AND PRECISE - 1-2 sentences, rarely 3. Every word must earn its place. No filler, no
+  wall of text.
+- They must still feel PERSONAL - written in first person, as if the account owner wrote it
+  themselves, not a marketing department. Avoid generic phrases like "Check this out!" or "New
+  content out now!".
+- They must be written to drive ENGAGEMENT - use techniques like a genuine question to followers,
+  a small cliffhanger/unfinished thought, a vulnerable/honest detail, or something that invites
+  comments - vary the technique between suggestions.
+- Use emojis sparingly and naturally, not in every sentence.
+- Do NOT include hashtags of any kind.
+
+Respond with ONLY valid JSON, a list of objects with exactly these fields:
+[
+  {
+    "scenario": "A short description of the evergreen scenario this caption imagines (e.g. 'walking out before a show')",
+    "label": "Short style label, e.g. Honest/vulnerable, Question to followers, Cliffhanger, Bold claim, Storytime",
+    "text": "The caption text itself - no hashtags"
+  }
+]
+
+Do not include anything other than the JSON array itself - no markdown fences, no explanation text.`;
+
+  const text = await askClaude(prompt, 1800);
+  const captions = parseJsonFromClaude(text, "subcategory captions");
+
+  const insertMany = db.transaction((items) => {
+    for (const item of items) {
+      insertCaption.run({
+        idea_id: null,
+        category,
+        subcategory,
+        topic: item.scenario || null,
+        label: item.label || "Suggestion",
+        text: item.text || "",
+      });
+    }
+  });
+  insertMany(captions);
+  return captions.length;
 }
 
 // "Inspiration" searches the live web for real, currently-circulating posts/moments in this
@@ -636,7 +702,16 @@ app.delete("/api/ideas/:id", (req, res) => {
 // ---- Captions ----
 app.post("/api/captions/generate", async (req, res) => {
   try {
-    const { ideaId, topic, category, count } = req.body || {};
+    const { ideaId, topic, category, subcategory, count } = req.body || {};
+    // Subcategory batch mode: standalone captions for a Kygo sub-tab, no idea/topic needed.
+    // Keeps the existing idea-based and free-text-topic modes fully intact alongside this.
+    if (!ideaId && !topic && subcategory) {
+      if (!isValidCategory(category)) {
+        return res.status(400).json({ ok: false, error: "Invalid or missing category" });
+      }
+      const n = await generateSubcategoryCaptions(category, subcategory, parseInt(count, 10) || CAPTIONS_PER_BATCH);
+      return res.json({ ok: true, generated: n });
+    }
     const captions = await generateCaptions({
       ideaId: ideaId || null,
       topic: topic || null,
@@ -654,14 +729,33 @@ app.get("/api/captions", (req, res) => {
     const rows = db.prepare(`SELECT * FROM captions WHERE idea_id = ? ORDER BY created_at DESC`).all(req.query.ideaId);
     return res.json(rows);
   }
-  // Standalone (free-text topic) captions, grouped client-side by topic + minute created.
   const category = req.query.category;
-  const rows = category
-    ? db
-        .prepare(`SELECT * FROM captions WHERE idea_id IS NULL AND category = ? ORDER BY created_at DESC LIMIT 100`)
-        .all(category)
-    : db.prepare(`SELECT * FROM captions WHERE idea_id IS NULL ORDER BY created_at DESC LIMIT 100`).all();
+  const subcategory = req.query.subcategory;
+  if (subcategory && !isValidSubcategory(category, subcategory)) {
+    return res.status(400).json({ error: "Invalid subcategory for this category" });
+  }
+  // Standalone (free-text topic, or subcategory-batch) captions.
+  const conditions = ["idea_id IS NULL"];
+  const params = [];
+  if (req.query.favorited === "1") conditions.push("favorited = 1");
+  if (category) {
+    conditions.push("category = ?");
+    params.push(category);
+  }
+  if (subcategory) {
+    conditions.push("subcategory = ?");
+    params.push(subcategory);
+  }
+  const rows = db
+    .prepare(`SELECT * FROM captions WHERE ${conditions.join(" AND ")} ORDER BY created_at DESC LIMIT 100`)
+    .all(...params);
   res.json(rows);
+});
+
+app.post("/api/captions/:id/favorite", (req, res) => {
+  const favorited = req.body?.favorited ? 1 : 0;
+  db.prepare(`UPDATE captions SET favorited = ? WHERE id = ?`).run(favorited, req.params.id);
+  res.json({ ok: true });
 });
 
 app.delete("/api/captions/:id", (req, res) => {
@@ -743,11 +837,19 @@ if (ANTHROPIC_API_KEY) {
     () => {
       for (const category of CATEGORIES) {
         generateIdeas(category).catch((e) => console.error(`Cron generation failed for ${category}:`, e.message));
+        const subcats = SUBCATEGORIES[category];
+        if (subcats) {
+          for (const subcategory of Object.keys(subcats)) {
+            generateSubcategoryCaptions(category, subcategory).catch((e) =>
+              console.error(`Cron caption generation failed for ${category}/${subcategory}:`, e.message)
+            );
+          }
+        }
       }
     },
     { timezone: CRON_TIMEZONE }
   );
-  console.log(`Cron set up: generates ${IDEAS_PER_BATCH} ideas per category (${CATEGORIES.join(", ")}) on schedule "${CRON_SCHEDULE}" (${CRON_TIMEZONE})`);
+  console.log(`Cron set up: generates ${IDEAS_PER_BATCH} ideas per category (${CATEGORIES.join(", ")}), plus ${CAPTIONS_PER_BATCH} captions per Kygo subcategory, on schedule "${CRON_SCHEDULE}" (${CRON_TIMEZONE})`);
 } else {
   console.warn("ANTHROPIC_API_KEY is missing - automatic generation is off. Set it in .env.");
 }
