@@ -256,34 +256,50 @@ async function askClaude(prompt, maxTokens = 2000) {
   return textBlock.text;
 }
 
-// For prompts that use the web search tool: Claude's content array can contain an
-// early "I'll search for..." text block before the search runs, so the FINAL text
-// block (after any search results) is the one with the actual answer.
-//
-// A long search sequence can also make the API pause the turn mid-work
-// (stop_reason "pause_turn") before Claude ever writes the final answer - if that
-// happens we must send the paused assistant content back and continue, or we end up
-// grabbing an intermediate "I now have enough info to..." narration block instead of
-// the real JSON. Anthropic's docs say to resend the paused assistant message unchanged.
+function looksLikeJson(text) {
+  return /[[{][\s\S]*[\]}]/.test(text.trim());
+}
+
+// For prompts that use the web search tool. Two failure modes this guards against:
+// 1. A long search sequence can make the API pause the turn mid-work (stop_reason
+//    "pause_turn") before Claude ever writes the final answer - we resend the paused
+//    assistant content and continue, per Anthropic's documented pattern.
+// 2. Even without pausing, Claude sometimes ends a long search sequence with only
+//    narration ("I now have enough info to...") and never actually writes the JSON.
+//    If nothing in the response looks like JSON, we give it one explicit nudge to
+//    just answer, instead of failing outright.
 async function askClaudeWithSearch(prompt, maxTokens = 2000, maxSearches = 5) {
   const messages = [{ role: "user", content: prompt }];
   const tools = [{ type: "web_search_20250305", name: "web_search", max_uses: maxSearches }];
-  let response = await anthropic.messages.create({ model: MODEL, max_tokens: maxTokens, messages, tools });
 
-  let loops = 0;
-  while (response.stop_reason === "pause_turn" && loops < 5) {
+  async function runTurn() {
+    let response = await anthropic.messages.create({ model: MODEL, max_tokens: maxTokens, messages, tools });
+    let loops = 0;
+    while (response.stop_reason === "pause_turn" && loops < 5) {
+      messages.push({ role: "assistant", content: response.content });
+      response = await anthropic.messages.create({ model: MODEL, max_tokens: maxTokens, messages, tools });
+      loops++;
+    }
+    if (response.stop_reason === "max_tokens") {
+      throw new Error("Claude's response was cut off before finishing (hit the token limit) - try again.");
+    }
+    const textBlocks = response.content.filter((b) => b.type === "text");
+    if (!textBlocks.length) throw new Error("No text in Claude's response.");
+    return { response, text: textBlocks.map((b) => b.text).join("\n\n") };
+  }
+
+  let { response, text } = await runTurn();
+
+  if (!looksLikeJson(text)) {
     messages.push({ role: "assistant", content: response.content });
-    response = await anthropic.messages.create({ model: MODEL, max_tokens: maxTokens, messages, tools });
-    loops++;
+    messages.push({
+      role: "user",
+      content: "You did not include the requested JSON in your last response. Respond with ONLY the JSON now - no other text.",
+    });
+    ({ text } = await runTurn());
   }
 
-  if (response.stop_reason === "max_tokens") {
-    throw new Error("Claude's response was cut off before finishing (hit the token limit) - try again.");
-  }
-
-  const textBlocks = response.content.filter((b) => b.type === "text");
-  if (!textBlocks.length) throw new Error("No text in Claude's response.");
-  return textBlocks[textBlocks.length - 1].text;
+  return text;
 }
 
 async function generateIdeas(category, count = IDEAS_PER_BATCH, subcategory = null) {
