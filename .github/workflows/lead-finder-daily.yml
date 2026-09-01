@@ -1,0 +1,25 @@
+name: Lead Finder Daily
+
+on:
+  schedule:
+    # 05:15 UTC = 07:15 Norway time during CEST (offset by 15 min from the content
+    # ideas cron to avoid both jobs competing for the runner at the exact same time).
+    - cron: "15 5 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  discover:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: cd lead-finder && npm install --no-audit --no-fund
+
+      - name: Run lead discovery
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PTP_SITE_DEPLOY_KEY: ${{ secrets.PTP_SITE_DEPLOY_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node lead-finder/discover.js

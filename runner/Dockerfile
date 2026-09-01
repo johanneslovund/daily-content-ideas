@@ -4,7 +4,12 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG RUNNER_VERSION=2.319.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl ca-certificates jq git docker.io sudo \
+      curl ca-certificates jq git docker.io sudo openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Node.js 20 (needed for the lead-finder automation workflow).
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Docker Compose v2 CLI plugin (static binary, arch-detected).

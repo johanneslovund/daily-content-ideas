@@ -1,0 +1,9 @@
+{
+  "name": "lead-finder-automation",
+  "private": true,
+  "version": "1.0.0",
+  "main": "discover.js",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1"
+  }
+}
