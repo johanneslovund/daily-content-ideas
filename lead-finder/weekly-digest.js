@@ -119,10 +119,31 @@ async function fetchMetaJson(url) {
   }
 }
 
-// Pulls this week's actual post counts, likes/comments, and current follower counts
-// from Instagram + Facebook via the Meta Graph API. Returns null (section skipped
-// entirely, digest still sends) if the token is missing or both platforms fail -
-// this is enrichment, not something that should ever block the weekly send.
+// Per-post Instagram insights (reach/views/saves/shares/total_interactions) - real
+// metrics confirmed working against the account, unlike the classic Facebook Page
+// Insights metrics (impressions, engaged_users, etc.), which are deprecated on this
+// API version and return errors regardless of permissions. Instagram's numbers are
+// therefore richer than Facebook's below - that's a real platform limitation, not
+// something skipped for convenience.
+async function getIgMediaInsights(mediaId) {
+  const base = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
+  const body = await fetchMetaJson(
+    `${base}/${mediaId}/insights?metric=reach,views,saved,shares,total_interactions&access_token=${META_PAGE_ACCESS_TOKEN}`
+  );
+  const byName = Object.fromEntries((body?.data || []).map((m) => [m.name, m.values?.[0]?.value ?? 0]));
+  return {
+    reach: byName.reach || 0,
+    views: byName.views || 0,
+    saved: byName.saved || 0,
+    shares: byName.shares || 0,
+    totalInteractions: byName.total_interactions || 0,
+  };
+}
+
+// Pulls this week's actual post counts, engagement, reach, and current follower
+// counts from Instagram + Facebook via the Meta Graph API. Returns null (section
+// skipped entirely, digest still sends) if the token is missing or both platforms
+// fail - this is enrichment, not something that should ever block the weekly send.
 async function getSocialMediaReport() {
   if (!META_PAGE_ACCESS_TOKEN) {
     lib.log("digest", "META_PAGE_ACCESS_TOKEN not set - skipping SoMe report.");
@@ -146,12 +167,19 @@ async function getSocialMediaReport() {
   const igRecent = (igMedia?.data || []).filter((m) => new Date(m.timestamp).getTime() >= weekAgo);
   const fbRecent = (fbPosts?.data || []).filter((p) => new Date(p.created_time).getTime() >= weekAgo);
 
+  const igInsights = await Promise.all(igRecent.map((m) => getIgMediaInsights(m.id)));
+
   const instagram = igAccount
     ? {
         followers: igAccount.followers_count ?? null,
         postsThisWeek: igRecent.length,
         likesThisWeek: igRecent.reduce((sum, m) => sum + (m.like_count || 0), 0),
         commentsThisWeek: igRecent.reduce((sum, m) => sum + (m.comments_count || 0), 0),
+        reachThisWeek: igInsights.reduce((sum, i) => sum + i.reach, 0),
+        viewsThisWeek: igInsights.reduce((sum, i) => sum + i.views, 0),
+        interactionsThisWeek: igInsights.reduce((sum, i) => sum + i.totalInteractions, 0),
+        savedThisWeek: igInsights.reduce((sum, i) => sum + i.saved, 0),
+        sharesThisWeek: igInsights.reduce((sum, i) => sum + i.shares, 0),
       }
     : null;
 
@@ -283,12 +311,20 @@ function enrichLeadLine(commitMsg, leadsByOrgnr) {
   return `${name} — score ${lead.score}, ${lead.fylke || "ukjent fylke"}`;
 }
 
-function growthLine(label, current, prior) {
-  if (current == null) return null;
-  if (prior == null || prior.followers == null) return `  ${label}: ${current.followers} følgere, ${current.postsThisWeek} nye innlegg, ${current.likesThisWeek} liker, ${current.commentsThisWeek} kommentarer`;
+function followerDeltaText(current, prior) {
+  if (prior == null || prior.followers == null) return `${current.followers} følgere`;
   const delta = current.followers - prior.followers;
   const sign = delta > 0 ? "+" : "";
-  return `  ${label}: ${current.followers} følgere (${sign}${delta} denne uken), ${current.postsThisWeek} nye innlegg, ${current.likesThisWeek} liker, ${current.commentsThisWeek} kommentarer`;
+  return `${current.followers} følgere (${sign}${delta} denne uken)`;
+}
+
+function growthLine(label, current, prior) {
+  if (current == null) return null;
+  const parts = [followerDeltaText(current, prior), `${current.postsThisWeek} nye innlegg`, `${current.likesThisWeek} liker`, `${current.commentsThisWeek} kommentarer`];
+  if (current.reachThisWeek != null) {
+    parts.push(`${current.reachThisWeek} rekkevidde`, `${current.viewsThisWeek} visninger`, `${current.savedThisWeek} lagringer`, `${current.sharesThisWeek} delinger`);
+  }
+  return `  ${label}: ${parts.join(", ")}`;
 }
 
 function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup, trends, someReport) {
@@ -392,20 +428,63 @@ function htmlLeadCard(name, badgeText, badgeColor, sub) {
     </div>`;
 }
 
+function deltaSpan(delta) {
+  if (delta == null) return "";
+  const sign = delta > 0 ? "+" : "";
+  const color = delta > 0 ? "#3FA873" : delta < 0 ? "#DC2626" : "#6B7280";
+  return `<span style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${color};">${sign}${delta} denne uken</span>`;
+}
+
+// A metric-block grid mirroring the "Instagram/Facebook Performance Summary" style:
+// platform name as a heading, then a 3-per-row table of label/big-number/delta
+// blocks. Table-based (not CSS grid) since that's what email clients reliably render.
+function htmlMetricGrid(platformLabel, items) {
+  const cells = items
+    .map(
+      (item) => `
+      <td width="33%" valign="top" style="padding:12px 10px;border:1px solid #E4E7E5;">
+        <div style="font:12px -apple-system,'Segoe UI',sans-serif;color:#6B7280;text-transform:uppercase;letter-spacing:0.02em;margin-bottom:4px;">${escapeHtml(item.label)}</div>
+        <div style="font:700 20px -apple-system,'Segoe UI',sans-serif;color:#14171A;">${escapeHtml(item.value)}</div>
+        ${item.deltaHtml ? `<div style="margin-top:2px;">${item.deltaHtml}</div>` : ""}
+      </td>`
+    );
+
+  const rows = [];
+  for (let i = 0; i < cells.length; i += 3) {
+    const rowCells = cells.slice(i, i + 3);
+    while (rowCells.length < 3) rowCells.push(`<td width="33%" style="border:1px solid #E4E7E5;"></td>`);
+    rows.push(`<tr>${rowCells.join("")}</tr>`);
+  }
+
+  return `
+    <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:#14171A;margin:16px 0 8px;">${escapeHtml(platformLabel)}</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+      ${rows.join("")}
+    </table>`;
+}
+
 function htmlStatCard(label, current, prior) {
   if (current == null) return "";
-  let deltaHtml = "";
-  if (prior != null && prior.followers != null) {
-    const delta = current.followers - prior.followers;
-    const sign = delta > 0 ? "+" : "";
-    const color = delta > 0 ? "#3FA873" : delta < 0 ? "#DC2626" : "#6B7280";
-    deltaHtml = `<span style="color:${color};font-weight:600;">${sign}${delta}</span> denne uken`;
+  const followerDelta = prior != null && prior.followers != null ? current.followers - prior.followers : null;
+
+  const items = [
+    { label: "Følgere", value: String(current.followers), deltaHtml: deltaSpan(followerDelta) },
+    { label: "Publiserte innlegg", value: String(current.postsThisWeek) },
+    { label: "Liker", value: String(current.likesThisWeek) },
+    { label: "Kommentarer", value: String(current.commentsThisWeek) },
+  ];
+
+  if (current.reachThisWeek != null) {
+    items.push(
+      { label: "Rekkevidde", value: String(current.reachThisWeek) },
+      { label: "Visninger", value: String(current.viewsThisWeek) },
+      { label: "Total interaksjon", value: String(current.interactionsThisWeek) },
+      { label: "Lagringer", value: String(current.savedThisWeek) },
+      { label: "Delinger", value: String(current.sharesThisWeek) }
+    );
   }
-  return `
-    <div style="padding:14px 16px;border:1px solid #E4E7E5;border-radius:8px;margin-bottom:8px;">
-      <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:#14171A;margin-bottom:4px;">${escapeHtml(label)} — ${current.followers} følgere</div>
-      <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:#6B7280;">${current.postsThisWeek} nye innlegg · ${current.likesThisWeek} liker · ${current.commentsThisWeek} kommentarer${deltaHtml ? " · " + deltaHtml : ""}</div>
-    </div>`;
+
+  return htmlMetricGrid(label, items);
 }
 
 function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup, trends, someReport) {
