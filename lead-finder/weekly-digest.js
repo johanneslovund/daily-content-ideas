@@ -16,6 +16,14 @@ const DIGEST_TO = (process.env.DIGEST_TO_EMAILS || "jl@palmtreeprod.com,ms@palmt
   .map((s) => s.trim())
   .filter(Boolean);
 const SITE_URL = "https://ptp-internal.pages.dev";
+// The site's own pages have no per-row anchors or URL-param search, so these are
+// page-level deep-links (right tool instead of the homepage) rather than
+// jumping straight to a specific row - that would need changes to the site's own
+// templates, out of scope for the digest script itself.
+const LEAD_FINDER_URL = `${SITE_URL}/${encodeURIComponent("Palm Tree Lead Finder.html")}`;
+const PIPELINE_URL = `${SITE_URL}/${encodeURIComponent("Palm Tree Pipeline.html")}`;
+const KONKURRANSE_URL = `${SITE_URL}/${encodeURIComponent("Palm Tree Konkurranse.html")}`;
+const EVENT_URL = `${SITE_URL}/${encodeURIComponent("Palm Tree Event.html")}`;
 const FOLLOWUP_SCORE_THRESHOLD = Number(process.env.LEAD_FOLLOWUP_SCORE_THRESHOLD || 80);
 const FOLLOWUP_STALE_DAYS = Number(process.env.LEAD_FOLLOWUP_STALE_DAYS || 14);
 const FOLLOWUP_MAX_ITEMS = 5;
@@ -207,6 +215,29 @@ async function getIgAccountInsights(sinceEpoch, untilEpoch) {
     accountsEngaged: byName.accounts_engaged || 0,
     profileViews: byName.profile_views || 0,
   };
+}
+
+// Warns BEFORE the SoMe section silently stops appearing one week, rather than
+// leaving that failure mode indistinguishable from "a genuinely quiet week." Meta
+// Page tokens themselves don't expire, but the data_access grant does (~90 days
+// from last real use) and needs re-authorizing via Graph API Explorer when it's
+// getting close.
+async function checkMetaTokenHealth() {
+  if (!META_PAGE_ACCESS_TOKEN) return null;
+  const base = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
+  const body = await fetchMetaJson(
+    `${base}/debug_token?input_token=${META_PAGE_ACCESS_TOKEN}&access_token=${META_PAGE_ACCESS_TOKEN}`
+  );
+  const data = body?.data;
+  if (!data) return { ok: false, reason: "Kunne ikke sjekke Meta-tilgangens status." };
+  if (!data.is_valid) return { ok: false, reason: "Meta-tokenet er ikke lenger gyldig." };
+  if (data.data_access_expires_at) {
+    const daysLeft = Math.floor((data.data_access_expires_at * 1000 - Date.now()) / 86400000);
+    if (daysLeft <= 14) {
+      return { ok: false, reason: `Datatilgangen for Instagram/Facebook utløper om ${daysLeft} dager.`, daysLeft };
+    }
+  }
+  return { ok: true };
 }
 
 // Pulls real account-level activity (this week, prior week for a week-over-week
@@ -614,15 +645,72 @@ function igGrowthLine(current, prior, priorMonth, priorYear) {
   return `  Instagram${handle}: ${parts.join(", ")}`;
 }
 
-function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder) {
+// Up to 4 short, skimmable highlights for the top of the email - the digest has
+// grown into a genuinely long read, so this exists to answer "did anything urgent
+// happen" in a few seconds without scrolling. Priority-ordered: real sales
+// movement first, then new discoveries, then the nearest upcoming event, then
+// social growth - each only included if there's real content behind it.
+function buildTldrHighlights({ leadsCount, competitorsCount, upcomingEventsCount, movements, winLoss, topOpportunity, eventsReminder, someReport }) {
+  const items = [];
+
+  if (movements.length) {
+    items.push(`${movements.length} pipeline-bevegelse${movements.length === 1 ? "" : "r"} denne uken`);
+  }
+  if (winLoss.won > 0 || winLoss.lost > 0) {
+    items.push(`${winLoss.won} vunnet, ${winLoss.lost} tapt siste ${winLoss.days} dager`);
+  }
+  if (topOpportunity) {
+    items.push(`Følg opp: ${topOpportunity.navn} (Tilbud-fasen)`);
+  }
+  const newCount = leadsCount + competitorsCount + upcomingEventsCount;
+  if (newCount > 0) {
+    items.push(`${newCount} nye funn: ${leadsCount} lead${leadsCount === 1 ? "" : "s"}, ${competitorsCount} konkurrent${competitorsCount === 1 ? "" : "er"}, ${upcomingEventsCount} event`);
+  }
+  if (eventsReminder.length) {
+    const soon = eventsReminder[0];
+    const days = daysUntil(soon.startDato);
+    if (days <= 7) items.push(`${soon.navn} om ${days} dag${days === 1 ? "" : "er"}`);
+  }
+  const ig = someReport?.report?.instagram;
+  if (ig?.week?.reach != null && ig?.priorWeek?.reach) {
+    const pct = Math.round(((ig.week.reach - ig.priorWeek.reach) / ig.priorWeek.reach) * 100);
+    const { arrow } = trendArrow(pct);
+    items.push(`Instagram-rekkevidde ${arrow} ${pct > 0 ? "+" : ""}${pct}% fra uken før`);
+  }
+
+  return items.slice(0, 4);
+}
+
+function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth) {
   const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
   const total = leads.length + competitors.length + upcomingEvents.length;
   const lines = [];
   lines.push(`PTP Internal - ukentlig oppsummering (${weekRange})`);
   lines.push(``);
 
+  const highlights = buildTldrHighlights({
+    leadsCount: leads.length,
+    competitorsCount: competitors.length,
+    upcomingEventsCount: upcomingEvents.length,
+    movements,
+    winLoss,
+    topOpportunity,
+    eventsReminder,
+    someReport,
+  });
+  if (highlights.length) {
+    lines.push(`Kort oppsummert:`);
+    highlights.forEach((h) => lines.push(`  - ${h}`));
+    lines.push(``);
+  }
+
+  if (tokenHealth && !tokenHealth.ok) {
+    lines.push(`⚠ ${tokenHealth.reason}`);
+    lines.push(``);
+  }
+
   if (movements.length) {
-    lines.push(`Pipeline-bevegelse denne uken (${movements.length}):`);
+    lines.push(`Pipeline-bevegelse denne uken (${movements.length}) — ${PIPELINE_URL}:`);
     movements.forEach((m) => lines.push(`  - ${m.navn} → ${STAGE_LABELS[m.stage] || m.stage} (${formatDateNo(new Date(m.ts))}${m.user ? `, ${m.user}` : ""})`));
     lines.push(``);
   }
@@ -633,18 +721,7 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
   }
 
   if (topOpportunity) {
-    lines.push(`Størst mulighet akkurat nå: ${topOpportunity.navn} — score ${topOpportunity.score}, i "Tilbud"-fasen`);
-    lines.push(``);
-  }
-
-  if (eventsReminder.length) {
-    lines.push(`Kommende event (neste 14 dager):`);
-    eventsReminder.forEach((e) => {
-      const days = daysUntil(e.startDato);
-      lines.push(`  - ${e.navn} — ${formatDateNo(new Date(e.startDato))} (om ${days} dag${days === 1 ? "" : "er"})`);
-      const synopsis = shortSynopsis(e.beskrivelse);
-      if (synopsis) lines.push(`    ${synopsis}`);
-    });
+    lines.push(`Størst mulighet akkurat nå: ${topOpportunity.navn} — score ${topOpportunity.score}, i "Tilbud"-fasen (${PIPELINE_URL})`);
     lines.push(``);
   }
 
@@ -672,13 +749,13 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
   }
 
   if (followup.uncontacted.length) {
-    lines.push(`Leads å følge opp - høy score, ikke kontaktet ennå (${followup.uncontacted.length}):`);
+    lines.push(`Leads å følge opp - høy score, ikke kontaktet ennå (${followup.uncontacted.length}) — ${LEAD_FINDER_URL}:`);
     followup.uncontacted.forEach((l) => lines.push(`  - ${l.navn} — score ${l.score}, ${l.fylke || "ukjent fylke"}`));
     lines.push(``);
   }
 
   if (followup.stale.length) {
-    lines.push(`Leads som har stått stille i ${FOLLOWUP_STALE_DAYS}+ dager (${followup.stale.length}):`);
+    lines.push(`Leads som har stått stille i ${FOLLOWUP_STALE_DAYS}+ dager (${followup.stale.length}) — ${PIPELINE_URL}:`);
     followup.stale.forEach((l) => lines.push(`  - ${l.navn} — "${l.entry.stage}" i ${l.days} dager`));
     lines.push(``);
   }
@@ -687,7 +764,7 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
     lines.push(`Ingen nye funn denne uken. Automasjonen fant ingenting som var verifiserbart og relevant nok til å legge til - det er en normal og forventet uke, ikke en feil.`);
   } else {
     if (leads.length) {
-      lines.push(`Nye leads (${leads.length}):`);
+      lines.push(`Nye leads (${leads.length}) — ${LEAD_FINDER_URL}:`);
       leads.forEach((c) => {
         lines.push(`  - ${enrichLeadLine(c, leadsByOrgnr)}`);
         const synopsis = getLeadSynopsis(c, leadsByOrgnr);
@@ -696,7 +773,7 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
       lines.push(``);
     }
     if (competitors.length) {
-      lines.push(`Nye konkurrenter (${competitors.length}):`);
+      lines.push(`Nye konkurrenter (${competitors.length}) — ${KONKURRANSE_URL}:`);
       competitors.forEach((c) => {
         const url = getCompetitorUrl(c);
         lines.push(`  - ${c.replace(/^Add competitor:\s*/, "")}${url ? ` — ${url}` : ""}`);
@@ -704,7 +781,7 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
       lines.push(``);
     }
     if (upcomingEvents.length) {
-      lines.push(`Nye event (${upcomingEvents.length}):`);
+      lines.push(`Nye event (${upcomingEvents.length}) — ${EVENT_URL}:`);
       upcomingEvents.forEach((c) => {
         lines.push(`  - ${c.replace(/^Add event:\s*/, "")}`);
         const synopsis = getEventSynopsis(c, eventsByName);
@@ -712,6 +789,17 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
       });
       lines.push(``);
     }
+  }
+
+  if (eventsReminder.length) {
+    lines.push(`Kommende event (neste 14 dager) — ${EVENT_URL}:`);
+    eventsReminder.forEach((e) => {
+      const days = daysUntil(e.startDato);
+      lines.push(`  - ${e.navn} — ${formatDateNo(new Date(e.startDato))} (om ${days} dag${days === 1 ? "" : "er"})`);
+      const synopsis = shortSynopsis(e.beskrivelse);
+      if (synopsis) lines.push(`    ${synopsis}`);
+    });
+    lines.push(``);
   }
 
   lines.push(``);
@@ -769,10 +857,13 @@ const C = {
 // Table-based layout with inline styles throughout - required for consistent
 // rendering across email clients (Gmail/Outlook strip <style> blocks and much of
 // modern CSS).
-function htmlSection(title, innerHtml) {
+function htmlSection(title, innerHtml, linkUrl) {
+  const heading = linkUrl
+    ? `<a href="${escapeHtml(linkUrl)}" style="color:${C.heading};text-decoration:none;">${escapeHtml(title)} <span style="color:${C.greenLight};font-weight:400;">↗</span></a>`
+    : escapeHtml(title);
   return `
   <tr><td style="padding:28px 32px 8px;">
-    <h2 style="margin:0 0 12px;font:600 15px -apple-system,'Segoe UI',sans-serif;color:${C.heading};">${escapeHtml(title)}</h2>
+    <h2 style="margin:0 0 12px;font:600 15px -apple-system,'Segoe UI',sans-serif;color:${C.heading};">${heading}</h2>
     ${innerHtml}
   </td></tr>`;
 }
@@ -903,17 +994,54 @@ function htmlInstagramStatCard(current, prior, priorMonth, priorYear) {
   return htmlMetricGrid(`Instagram${handle}`, items);
 }
 
-function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder) {
+// A highlighted box, visually distinct from the regular sections, so it reads as
+// "read this first" rather than just another item in the list.
+function htmlTldrBox(highlights) {
+  if (!highlights.length) return "";
+  return `
+  <tr><td style="padding:24px 32px 4px;">
+    <div style="border:1px solid ${C.green};border-radius:8px;padding:16px 18px;background:rgba(63,168,115,0.08);">
+      <div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${C.greenLight};text-transform:uppercase;letter-spacing:0.04em;margin-bottom:8px;">Kort oppsummert</div>
+      ${highlights.map((h) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};padding:2px 0;">• ${escapeHtml(h)}</div>`).join("")}
+    </div>
+  </td></tr>`;
+}
+
+function htmlWarningBox(tokenHealth) {
+  if (!tokenHealth || tokenHealth.ok) return "";
+  return `
+  <tr><td style="padding:16px 32px 4px;">
+    <div style="border:1px solid ${C.red};border-radius:8px;padding:12px 16px;background:rgba(229,140,116,0.1);font:13px -apple-system,'Segoe UI',sans-serif;color:${C.red};">
+      ⚠ ${escapeHtml(tokenHealth.reason)}
+    </div>
+  </td></tr>`;
+}
+
+function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth) {
   const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
   const total = leads.length + competitors.length + upcomingEvents.length;
   let body = "";
+
+  const highlights = buildTldrHighlights({
+    leadsCount: leads.length,
+    competitorsCount: competitors.length,
+    upcomingEventsCount: upcomingEvents.length,
+    movements,
+    winLoss,
+    topOpportunity,
+    eventsReminder,
+    someReport,
+  });
+  body += htmlTldrBox(highlights);
+  body += htmlWarningBox(tokenHealth);
 
   if (movements.length) {
     body += htmlSection(
       `Pipeline-bevegelse denne uken (${movements.length})`,
       movements
         .map((m) => htmlLeadCard(m.navn, STAGE_LABELS[m.stage] || m.stage, stageColor(m.stage), `${formatDateNo(new Date(m.ts))}${m.user ? ` · ${m.user}` : ""}`))
-        .join("")
+        .join(""),
+      PIPELINE_URL
     );
   }
 
@@ -931,20 +1059,8 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
   if (topOpportunity) {
     body += htmlSection(
       "Størst mulighet akkurat nå",
-      htmlLeadCard(topOpportunity.navn, `score ${topOpportunity.score}`, "#D9B454", "I “Tilbud”-fasen")
-    );
-  }
-
-  if (eventsReminder.length) {
-    body += htmlSection(
-      "Kommende event (neste 14 dager)",
-      eventsReminder
-        .map((e) => {
-          const days = daysUntil(e.startDato);
-          const synopsis = shortSynopsis(e.beskrivelse);
-          return htmlLeadCard(e.navn, `om ${days} dag${days === 1 ? "" : "er"}`, C.greenLight, `${formatDateNo(new Date(e.startDato))}${synopsis ? ` · ${synopsis}` : ""}`);
-        })
-        .join("")
+      htmlLeadCard(topOpportunity.navn, `score ${topOpportunity.score}`, "#D9B454", "I “Tilbud”-fasen"),
+      PIPELINE_URL
     );
   }
 
@@ -995,7 +1111,8 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
       `Leads å følge opp - ikke kontaktet ennå (${followup.uncontacted.length})`,
       followup.uncontacted
         .map((l) => htmlLeadCard(l.navn, `score ${l.score}`, C.greenLight, l.fylke || "ukjent fylke"))
-        .join("")
+        .join(""),
+      LEAD_FINDER_URL
     );
   }
 
@@ -1004,7 +1121,8 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
       `Leads som har stått stille (${followup.stale.length})`,
       followup.stale
         .map((l) => htmlLeadCard(l.navn, `${l.days} dager`, "#D9B454", `"${l.entry.stage}"`))
-        .join("")
+        .join(""),
+      PIPELINE_URL
     );
   }
 
@@ -1025,7 +1143,8 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
               ${synopsis ? `<div style="font:12px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:2px;">${escapeHtml(synopsis)}</div>` : ""}
             </div>`;
           })
-          .join("")
+          .join(""),
+        LEAD_FINDER_URL
       );
     }
     if (competitors.length) {
@@ -1039,7 +1158,8 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
               url ? ` — <a href="${escapeHtml(url)}" style="color:${C.greenLight};">Nettside ↗</a>` : ""
             }</div>`;
           })
-          .join("")
+          .join(""),
+        KONKURRANSE_URL
       );
     }
     if (upcomingEvents.length) {
@@ -1053,9 +1173,27 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
               ${synopsis ? `<div style="font:12px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:2px;">${escapeHtml(synopsis)}</div>` : ""}
             </div>`;
           })
-          .join("")
+          .join(""),
+        EVENT_URL
       );
     }
+  }
+
+  // Moved to the very bottom, after all other sections - this is a forward-looking
+  // reminder rather than a "here's what's new" item, so it doesn't belong grouped
+  // with the discovery sections above it.
+  if (eventsReminder.length) {
+    body += htmlSection(
+      "Kommende event (neste 14 dager)",
+      eventsReminder
+        .map((e) => {
+          const days = daysUntil(e.startDato);
+          const synopsis = shortSynopsis(e.beskrivelse);
+          return htmlLeadCard(e.navn, `om ${days} dag${days === 1 ? "" : "er"}`, C.greenLight, `${formatDateNo(new Date(e.startDato))}${synopsis ? ` · ${synopsis}` : ""}`);
+        })
+        .join(""),
+      EVENT_URL
+    );
   }
 
   return `<!doctype html>
@@ -1159,6 +1297,7 @@ async function main() {
     const [chartBase64, analysis] = await Promise.all([buildGrowthChartBase64(history), getInstagramAnalysis(rawReport)]);
     someReport = { report: rawReport, prior, priorMonth, priorYear, chartBase64, analysis };
   }
+  const tokenHealth = await checkMetaTokenHealth();
 
   const weekRange = weekRangeLabel(new Date());
 
@@ -1166,11 +1305,11 @@ async function main() {
     "digest",
     `Past 7 days: ${grouped.leads.length} lead(s), ${grouped.competitors.length} competitor(s), ${grouped.events.length} event(s). ` +
       `Follow-up: ${followup.uncontacted.length} uncontacted high-score, ${followup.stale.length} stale in pipeline. ` +
-      `Trends: ${trends.length}. SoMe report: ${someReport ? "yes" : "skipped"}.`
+      `Trends: ${trends.length}. SoMe report: ${someReport ? "yes" : "skipped"}. Token health: ${tokenHealth ? (tokenHealth.ok ? "ok" : tokenHealth.reason) : "n/a"}.`
   );
 
-  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder);
-  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder);
+  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth);
+  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth);
   await sendDigest(text, html, weekRange);
 }
 
@@ -1204,4 +1343,6 @@ module.exports = {
   getWinLossTally,
   getTopOpportunity,
   getUpcomingEventsReminder,
+  checkMetaTokenHealth,
+  buildTldrHighlights,
 };
