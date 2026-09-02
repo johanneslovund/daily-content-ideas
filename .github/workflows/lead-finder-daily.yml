@@ -2,9 +2,11 @@ name: Lead Finder Daily
 
 on:
   schedule:
-    # 05:15 UTC = 07:15 Norway time during CEST (offset by 15 min from the content
-    # ideas cron to avoid both jobs competing for the runner at the exact same time).
-    - cron: "15 5 * * *"
+    # 03:00 UTC = 05:00 Norway time during CEST (summer time, UTC+2). GitHub Actions
+    # cron is always UTC with no timezone option - this will need updating to 04:00
+    # UTC once Norway switches back to CET (UTC+1) in late October, or it'll quietly
+    # drift to 06:00 local.
+    - cron: "0 3 * * *"
   workflow_dispatch: {}
 
 jobs:
