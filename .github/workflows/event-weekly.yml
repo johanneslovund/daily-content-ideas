@@ -1,0 +1,25 @@
+name: Event Weekly
+
+on:
+  schedule:
+    # 03:45 UTC Monday = 05:45 Norway time during CEST. Bump to 04:45 UTC once DST
+    # ends in late October (GitHub Actions cron has no timezone option).
+    - cron: "45 3 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  discover:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: cd lead-finder && npm install --no-audit --no-fund
+
+      - name: Run event discovery
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PTP_SITE_DEPLOY_KEY: ${{ secrets.PTP_SITE_DEPLOY_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node lead-finder/discover-event.js
