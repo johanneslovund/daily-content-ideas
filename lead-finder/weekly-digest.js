@@ -57,6 +57,35 @@ function daysSince(iso) {
   return Math.floor((Date.now() - then) / 86400000);
 }
 
+// Same trend-awareness pattern used for daily caption generation (see server.js) -
+// grounded in a real web search, with a hard rule against tying anything to a
+// sensitive event. Purely enrichment: if this fails for any reason, the digest
+// still sends without a trends section rather than blocking the whole send.
+async function getTrendIdeas() {
+  const prompt = `Search the web for what's genuinely going viral RIGHT NOW across Instagram Reels, TikTok, and YouTube Shorts - trending sounds, formats, memes, challenges, or editing styles. From what you find, pick the 3 most relevant ones that Palm Tree Productions (a high-end video/photo production company in Ålesund, Norway, serving brands, businesses, and artists) could realistically and tastefully adapt for their own or a client's social media.
+
+HARD RULE: never tie a suggestion to anything sensitive - a death, tragedy, disaster, injury, illness, or controversy, celebrity or otherwise. If a trend you found is sensitive in nature, skip it and find a different one. If fewer than 3 genuinely safe, relevant trends exist right now, return fewer - do not pad with a weak or forced idea.
+
+Respond in Norwegian (Bokmål). Respond with ONLY valid JSON, a list of objects with exactly these fields:
+[
+  {
+    "trend": "Short name of the trend/format/sound (max 8 words)",
+    "idea": "1-2 sentences: concretely how PTP could adapt this for a client or their own channel"
+  }
+]
+Do not include anything other than the JSON array itself - no markdown fences, no explanation.`;
+
+  try {
+    const text = await lib.askClaudeWithSearch(prompt, 1500, 6);
+    const trends = lib.parseJson(text);
+    if (!Array.isArray(trends)) throw new Error("Expected a JSON array.");
+    return trends.slice(0, 3).filter((t) => t && t.trend && t.idea);
+  } catch (e) {
+    lib.log("digest", `Trend ideas skipped (${e.message}).`);
+    return [];
+  }
+}
+
 // Cross-references this week's new leads (and the live Pipeline/Archive state) against
 // the leads data file so the digest can show a score/fylke instead of just a bare name,
 // and can flag leads worth actual sales action - not just "here's what was discovered."
@@ -104,11 +133,17 @@ function enrichLeadLine(commitMsg, leadsByOrgnr) {
   return `${name} — score ${lead.score}, ${lead.fylke || "ukjent fylke"}`;
 }
 
-function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup) {
+function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup, trends) {
   const total = leads.length + competitors.length + events.length;
   const lines = [];
   lines.push(`PTP Internal - ukentlig oppsummering`);
   lines.push(``);
+
+  if (trends.length) {
+    lines.push(`Aktuelle SoMe-trender å vurdere (${trends.length}):`);
+    trends.forEach((t) => lines.push(`  - ${t.trend}: ${t.idea}`));
+    lines.push(``);
+  }
 
   if (followup.uncontacted.length) {
     lines.push(`Leads å følge opp - høy score, ikke kontaktet ennå (${followup.uncontacted.length}):`);
@@ -147,7 +182,131 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup)
   return lines.join("\n");
 }
 
-async function sendDigest(text) {
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Table-based layout with inline styles throughout - required for consistent
+// rendering across email clients (Gmail/Outlook strip <style> blocks and much of
+// modern CSS). Mirrors the site's brand green (#3FA873/#4FBD84) but on a light
+// background, since dark email bodies render inconsistently and read poorly in
+// most inboxes.
+function htmlSection(title, innerHtml) {
+  return `
+  <tr><td style="padding:28px 32px 8px;">
+    <h2 style="margin:0 0 12px;font:600 15px -apple-system,'Segoe UI',sans-serif;color:#14171A;">${escapeHtml(title)}</h2>
+    ${innerHtml}
+  </td></tr>`;
+}
+
+function htmlLeadCard(name, badgeText, badgeColor, sub) {
+  return `
+    <div style="padding:10px 14px;border:1px solid #E4E7E5;border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:#14171A;">${escapeHtml(name)}</div>
+        ${sub ? `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:#6B7280;margin-top:2px;">${escapeHtml(sub)}</div>` : ""}
+      </div>
+      <span style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${badgeColor};background:${badgeColor}1A;padding:4px 10px;border-radius:999px;white-space:nowrap;">${escapeHtml(badgeText)}</span>
+    </div>`;
+}
+
+function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup, trends) {
+  const total = leads.length + competitors.length + events.length;
+  let body = "";
+
+  if (followup.uncontacted.length) {
+    body += htmlSection(
+      `Leads å følge opp - ikke kontaktet ennå (${followup.uncontacted.length})`,
+      followup.uncontacted
+        .map((l) => htmlLeadCard(l.navn, `score ${l.score}`, "#3FA873", l.fylke || "ukjent fylke"))
+        .join("")
+    );
+  }
+
+  if (followup.stale.length) {
+    body += htmlSection(
+      `Leads som har stått stille (${followup.stale.length})`,
+      followup.stale
+        .map((l) => htmlLeadCard(l.navn, `${l.days} dager`, "#D97706", `"${l.entry.stage}"`))
+        .join("")
+    );
+  }
+
+  if (trends.length) {
+    body += htmlSection(
+      "Aktuelle SoMe-trender å vurdere",
+      trends
+        .map(
+          (t) => `
+      <div style="padding:12px 14px;border:1px solid #E4E7E5;border-radius:8px;margin-bottom:8px;">
+        <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:#3FA873;margin-bottom:4px;">${escapeHtml(t.trend)}</div>
+        <div style="font:13px/1.5 -apple-system,'Segoe UI',sans-serif;color:#374151;">${escapeHtml(t.idea)}</div>
+      </div>`
+        )
+        .join("")
+    );
+  }
+
+  if (total === 0) {
+    body += htmlSection(
+      "Nye funn denne uken",
+      `<div style="font:13px/1.5 -apple-system,'Segoe UI',sans-serif;color:#6B7280;">Ingen nye funn denne uken. Automasjonen fant ingenting som var verifiserbart og relevant nok til å legge til - det er en normal og forventet uke, ikke en feil.</div>`
+    );
+  } else {
+    if (leads.length) {
+      body += htmlSection(
+        `Nye leads (${leads.length})`,
+        leads.map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:#374151;padding:4px 0;">${escapeHtml(enrichLeadLine(c, leadsByOrgnr))}</div>`).join("")
+      );
+    }
+    if (competitors.length) {
+      body += htmlSection(
+        `Nye konkurrenter (${competitors.length})`,
+        competitors
+          .map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:#374151;padding:4px 0;">${escapeHtml(c.replace(/^Add competitor:\s*/, ""))}</div>`)
+          .join("")
+      );
+    }
+    if (events.length) {
+      body += htmlSection(
+        `Nye event (${events.length})`,
+        events
+          .map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:#374151;padding:4px 0;">${escapeHtml(c.replace(/^Add event:\s*/, ""))}</div>`)
+          .join("")
+      );
+    }
+  }
+
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  </head>
+  <body style="margin:0;padding:0;background:#F5F6F5;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5F6F5;padding:24px 0;">
+      <tr><td align="center">
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border-radius:12px;overflow:hidden;max-width:600px;width:100%;">
+          <tr><td style="padding:32px 32px 20px;border-bottom:3px solid #3FA873;">
+            <div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:#3FA873;letter-spacing:0.04em;text-transform:uppercase;">PTP Internal</div>
+            <h1 style="margin:4px 0 0;font:700 22px -apple-system,'Segoe UI',sans-serif;color:#14171A;">Ukentlig oppsummering</h1>
+          </td></tr>
+          ${body}
+          <tr><td style="padding:24px 32px 32px;">
+            <a href="${SITE_URL}" style="display:inline-block;font:600 13px -apple-system,'Segoe UI',sans-serif;color:#FFFFFF;background:#3FA873;padding:10px 18px;border-radius:8px;text-decoration:none;">Åpne ptp-internal</a>
+          </td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+}
+
+async function sendDigest(text, html) {
   if (!RESEND_API_KEY) {
     lib.log("digest", "RESEND_API_KEY not set - skipping send, printing digest instead:");
     console.log(text);
@@ -164,6 +323,7 @@ async function sendDigest(text) {
       to: DIGEST_TO,
       subject: "PTP Internal - ukentlig oppsummering",
       text,
+      html,
     }),
   });
   const body = await res.json();
@@ -187,15 +347,18 @@ async function main() {
     fetchJson(`${SITE_URL}/api/lead-archive`),
   ]);
   const followup = buildFollowupSections(leadsData, pipeline || {}, archive || {});
+  const trends = await getTrendIdeas();
 
   lib.log(
     "digest",
     `Past 7 days: ${grouped.leads.length} lead(s), ${grouped.competitors.length} competitor(s), ${grouped.events.length} event(s). ` +
-      `Follow-up: ${followup.uncontacted.length} uncontacted high-score, ${followup.stale.length} stale in pipeline.`
+      `Follow-up: ${followup.uncontacted.length} uncontacted high-score, ${followup.stale.length} stale in pipeline. ` +
+      `Trends: ${trends.length}.`
   );
 
-  const text = buildDigestText(grouped, leadsByOrgnr, followup);
-  await sendDigest(text);
+  const text = buildDigestText(grouped, leadsByOrgnr, followup, trends);
+  const html = buildDigestHtml(grouped, leadsByOrgnr, followup, trends);
+  await sendDigest(text, html);
 }
 
 if (require.main === module) {
@@ -205,4 +368,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildFollowupSections, buildDigestText, enrichLeadLine, categorize, fetchJson };
+module.exports = { buildFollowupSections, buildDigestText, buildDigestHtml, enrichLeadLine, categorize, fetchJson, getTrendIdeas };
