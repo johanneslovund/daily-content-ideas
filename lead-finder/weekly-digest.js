@@ -1197,7 +1197,7 @@ function htmlEmailThreadCard(t) {
   return `
     <div style="padding:10px 14px;border:1px solid ${C.border};border-radius:8px;margin-bottom:8px;">
       <div style="display:flex;align-items:center;justify-content:space-between;">
-        <a href="${escapeHtml(t.link)}" style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:${C.heading};text-decoration:none;">${escapeHtml(t.subject)}</a>
+        <a href="${escapeHtml(t.link)}" style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:${C.heading};text-decoration:underline;text-decoration-color:${C.border};">${escapeHtml(t.subject)}</a>
         <span style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${badgeColor};background:${badgeColor}26;padding:4px 10px;border-radius:999px;white-space:nowrap;margin-left:10px;">${escapeHtml(t.urgency)}</span>
       </div>
       <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:4px;">${escapeHtml(t.from)}</div>
