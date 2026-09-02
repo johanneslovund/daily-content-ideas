@@ -75,6 +75,10 @@ function getEventSynopsis(commitMsg, eventsByName) {
   return shortSynopsis(event?.beskrivelse);
 }
 
+function getEventUrl(commitMsg, eventsByName) {
+  return eventsByName.get(eventNameFromCommit(commitMsg))?.url || null;
+}
+
 // Filters out events that have already concluded by the time the digest sends -
 // a newly-discovered event isn't relevant in a forward-looking newsletter once
 // it's over. Fails open (keeps the event) if we can't find its data or a date,
@@ -666,10 +670,16 @@ function buildTldrHighlights({ leadsCount, competitorsCount, upcomingEventsCount
   if (newCount > 0) {
     items.push(`${newCount} nye funn: ${leadsCount} lead${leadsCount === 1 ? "" : "s"}, ${competitorsCount} konkurrent${competitorsCount === 1 ? "" : "er"}, ${upcomingEventsCount} event`);
   }
-  if (eventsReminder.length) {
-    const soon = eventsReminder[0];
-    const days = daysUntil(soon.startDato);
-    if (days <= 7) items.push(`${soon.navn} om ${days} dag${days === 1 ? "" : "er"}`);
+  // "Kultur & festival" events (local festivals with no stated business tie) are
+  // tracked for the full events list, but not treated as urgent enough for the
+  // TL;DR - the other categories (Sjømat & havbruk, Maritim industri, Lokalt
+  // næringsliv, Film & kreativ bransje, Reiseliv & opplevelse) are PTP's actual
+  // client/target industries, a real distinction already present in the data
+  // rather than an invented relevance score.
+  const relevantSoon = eventsReminder.find((e) => e.kategori && e.kategori !== "Kultur & festival");
+  if (relevantSoon) {
+    const days = daysUntil(relevantSoon.startDato);
+    if (days <= 7) items.push(`${relevantSoon.navn} om ${days} dag${days === 1 ? "" : "er"}`);
   }
   const ig = someReport?.report?.instagram;
   if (ig?.week?.reach != null && ig?.priorWeek?.reach) {
@@ -783,7 +793,8 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
     if (upcomingEvents.length) {
       lines.push(`Nye event (${upcomingEvents.length}) — ${EVENT_URL}:`);
       upcomingEvents.forEach((c) => {
-        lines.push(`  - ${c.replace(/^Add event:\s*/, "")}`);
+        const url = getEventUrl(c, eventsByName);
+        lines.push(`  - ${c.replace(/^Add event:\s*/, "")}${url ? ` — ${url}` : ""}`);
         const synopsis = getEventSynopsis(c, eventsByName);
         if (synopsis) lines.push(`    ${synopsis}`);
       });
@@ -795,7 +806,7 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
     lines.push(`Kommende event (neste 14 dager) — ${EVENT_URL}:`);
     eventsReminder.forEach((e) => {
       const days = daysUntil(e.startDato);
-      lines.push(`  - ${e.navn} — ${formatDateNo(new Date(e.startDato))} (om ${days} dag${days === 1 ? "" : "er"})`);
+      lines.push(`  - ${e.navn} — ${formatDateNo(new Date(e.startDato))} (om ${days} dag${days === 1 ? "" : "er"})${e.url ? ` — ${e.url}` : ""}`);
       const synopsis = shortSynopsis(e.beskrivelse);
       if (synopsis) lines.push(`    ${synopsis}`);
     });
@@ -1168,8 +1179,11 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
         upcomingEvents
           .map((c) => {
             const synopsis = getEventSynopsis(c, eventsByName);
+            const url = getEventUrl(c, eventsByName);
             return `<div style="padding:4px 0;">
-              <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};">${escapeHtml(c.replace(/^Add event:\s*/, ""))}</div>
+              <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};">${escapeHtml(c.replace(/^Add event:\s*/, ""))}${
+                url ? ` — <a href="${escapeHtml(url)}" style="color:${C.greenLight};">Nettside ↗</a>` : ""
+              }</div>
               ${synopsis ? `<div style="font:12px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:2px;">${escapeHtml(synopsis)}</div>` : ""}
             </div>`;
           })
@@ -1189,7 +1203,16 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
         .map((e) => {
           const days = daysUntil(e.startDato);
           const synopsis = shortSynopsis(e.beskrivelse);
-          return htmlLeadCard(e.navn, `om ${days} dag${days === 1 ? "" : "er"}`, C.greenLight, `${formatDateNo(new Date(e.startDato))}${synopsis ? ` · ${synopsis}` : ""}`);
+          return `
+    <div style="padding:10px 14px;border:1px solid ${C.border};border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
+      <div>
+        <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:${C.heading};">${escapeHtml(e.navn)}${
+            e.url ? ` — <a href="${escapeHtml(e.url)}" style="color:${C.greenLight};font-weight:600;">Nettside ↗</a>` : ""
+          }</div>
+        <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:2px;">${escapeHtml(formatDateNo(new Date(e.startDato)))}${synopsis ? ` · ${escapeHtml(synopsis)}` : ""}</div>
+      </div>
+      <span style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${C.greenLight};background:${C.greenLight}26;padding:4px 10px;border-radius:999px;white-space:nowrap;">om ${days} dag${days === 1 ? "" : "er"}</span>
+    </div>`;
         })
         .join(""),
       EVENT_URL
@@ -1337,6 +1360,7 @@ module.exports = {
   loadEventsData,
   getLeadSynopsis,
   getEventSynopsis,
+  getEventUrl,
   isEventUpcoming,
   getCompetitorUrl,
   getPipelineMovements,
