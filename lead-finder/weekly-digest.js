@@ -21,6 +21,15 @@ const FOLLOWUP_STALE_DAYS = Number(process.env.LEAD_FOLLOWUP_STALE_DAYS || 14);
 const FOLLOWUP_MAX_ITEMS = 5;
 const ACTIVE_PIPELINE_STAGES = new Set(["kontaktet", "mote"]);
 
+// Meta (Instagram + Facebook) social media report. META_PAGE_ACCESS_TOKEN is a
+// non-expiring Page token generated via the "Palm Tree SoMe Manager" Meta app -
+// see functions/api/some-snapshots.js in the private site repo for where weekly
+// follower snapshots get stored so growth can be charted over time.
+const META_PAGE_ACCESS_TOKEN = process.env.META_PAGE_ACCESS_TOKEN;
+const META_PAGE_ID = "480020255390204";
+const META_IG_ID = "17841413442620055";
+const META_GRAPH_VERSION = "v26.0";
+
 function loadLeadsData() {
   const p = path.join(lib.WORK_DIR, "source-data", "palmtree-leads-data.json");
   if (!fs.existsSync(p)) return [];
@@ -86,6 +95,147 @@ Do not include anything other than the JSON array itself - no markdown fences, n
   }
 }
 
+function isoWeek(date) {
+  const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+  const dayNum = d.getUTCDay() || 7;
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+  return `${d.getUTCFullYear()}-W${String(weekNo).padStart(2, "0")}`;
+}
+
+async function fetchMetaJson(url) {
+  try {
+    const res = await fetch(url);
+    const body = await res.json();
+    if (!res.ok) {
+      lib.log("digest", `Meta API error: ${JSON.stringify(body.error || body)}`);
+      return null;
+    }
+    return body;
+  } catch (e) {
+    lib.log("digest", `Meta API fetch failed: ${e.message}`);
+    return null;
+  }
+}
+
+// Pulls this week's actual post counts, likes/comments, and current follower counts
+// from Instagram + Facebook via the Meta Graph API. Returns null (section skipped
+// entirely, digest still sends) if the token is missing or both platforms fail -
+// this is enrichment, not something that should ever block the weekly send.
+async function getSocialMediaReport() {
+  if (!META_PAGE_ACCESS_TOKEN) {
+    lib.log("digest", "META_PAGE_ACCESS_TOKEN not set - skipping SoMe report.");
+    return null;
+  }
+
+  const base = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
+  const weekAgo = Date.now() - 7 * 86400000;
+
+  const [igAccount, igMedia, fbPage, fbPosts] = await Promise.all([
+    fetchMetaJson(`${base}/${META_IG_ID}?fields=followers_count,media_count&access_token=${META_PAGE_ACCESS_TOKEN}`),
+    fetchMetaJson(`${base}/${META_IG_ID}/media?fields=id,timestamp,like_count,comments_count&limit=25&access_token=${META_PAGE_ACCESS_TOKEN}`),
+    fetchMetaJson(`${base}/${META_PAGE_ID}?fields=fan_count&access_token=${META_PAGE_ACCESS_TOKEN}`),
+    fetchMetaJson(
+      `${base}/${META_PAGE_ID}/posts?fields=id,created_time,likes.summary(true).limit(0),comments.summary(true).limit(0)&limit=25&access_token=${META_PAGE_ACCESS_TOKEN}`
+    ),
+  ]);
+
+  if (!igAccount && !fbPage) return null;
+
+  const igRecent = (igMedia?.data || []).filter((m) => new Date(m.timestamp).getTime() >= weekAgo);
+  const fbRecent = (fbPosts?.data || []).filter((p) => new Date(p.created_time).getTime() >= weekAgo);
+
+  const instagram = igAccount
+    ? {
+        followers: igAccount.followers_count ?? null,
+        postsThisWeek: igRecent.length,
+        likesThisWeek: igRecent.reduce((sum, m) => sum + (m.like_count || 0), 0),
+        commentsThisWeek: igRecent.reduce((sum, m) => sum + (m.comments_count || 0), 0),
+      }
+    : null;
+
+  const facebook = fbPage
+    ? {
+        followers: fbPage.fan_count ?? null,
+        postsThisWeek: fbRecent.length,
+        likesThisWeek: fbRecent.reduce((sum, p) => sum + (p.likes?.summary?.total_count || 0), 0),
+        commentsThisWeek: fbRecent.reduce((sum, p) => sum + (p.comments?.summary?.total_count || 0), 0),
+      }
+    : null;
+
+  return { instagram, facebook };
+}
+
+// Saves this week's snapshot (upsert-by-ISO-week, so a re-run this week overwrites
+// rather than duplicates) and returns the prior week's snapshot plus recent history,
+// so growth can be shown and a trend chart built.
+async function updateSnapshotsAndGetHistory(report) {
+  const week = isoWeek(new Date());
+  const existing = (await fetchJson(`${SITE_URL}/api/some-snapshots`)) || [];
+  const prior = existing.filter((s) => s.week !== week).slice(-1)[0] || null;
+
+  try {
+    const res = await fetch(`${SITE_URL}/api/some-snapshots`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...authHeaders() },
+      body: JSON.stringify({ week, instagram: report.instagram, facebook: report.facebook }),
+    });
+    if (!res.ok) lib.log("digest", `Failed to save SoMe snapshot: ${res.status}`);
+  } catch (e) {
+    lib.log("digest", `Failed to save SoMe snapshot: ${e.message}`);
+  }
+
+  const history = [...existing.filter((s) => s.week !== week), { week, instagram: report.instagram, facebook: report.facebook }].sort(
+    (a, b) => a.week.localeCompare(b.week)
+  );
+  return { prior, history: history.slice(-12) };
+}
+
+// Renders a follower-growth line chart via QuickChart's hosted image API (no API key
+// needed for this volume) and fetches it server-side so it can be embedded as base64 -
+// email clients don't run JS, so a live chart isn't an option. Returns null (chart
+// section omitted) with fewer than 2 data points, since a single point isn't a trend.
+async function buildGrowthChartBase64(history) {
+  if (history.length < 2) return null;
+
+  const chartConfig = {
+    type: "line",
+    data: {
+      labels: history.map((s) => s.week.replace(/^\d{4}-/, "")),
+      datasets: [
+        {
+          label: "Instagram",
+          data: history.map((s) => s.instagram?.followers ?? null),
+          borderColor: "#E1306C",
+          backgroundColor: "#E1306C",
+          fill: false,
+          tension: 0.3,
+        },
+        {
+          label: "Facebook",
+          data: history.map((s) => s.facebook?.followers ?? null),
+          borderColor: "#1877F2",
+          backgroundColor: "#1877F2",
+          fill: false,
+          tension: 0.3,
+        },
+      ],
+    },
+    options: { plugins: { legend: { position: "bottom" } }, scales: { y: { beginAtZero: false } } },
+  };
+
+  try {
+    const url = `https://quickchart.io/chart?w=500&h=260&bkg=white&c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer()).toString("base64");
+  } catch (e) {
+    lib.log("digest", `Chart generation failed: ${e.message}`);
+    return null;
+  }
+}
+
 // Cross-references this week's new leads (and the live Pipeline/Archive state) against
 // the leads data file so the digest can show a score/fylke instead of just a bare name,
 // and can flag leads worth actual sales action - not just "here's what was discovered."
@@ -133,11 +283,28 @@ function enrichLeadLine(commitMsg, leadsByOrgnr) {
   return `${name} — score ${lead.score}, ${lead.fylke || "ukjent fylke"}`;
 }
 
-function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup, trends) {
+function growthLine(label, current, prior) {
+  if (current == null) return null;
+  if (prior == null || prior.followers == null) return `  ${label}: ${current.followers} følgere, ${current.postsThisWeek} nye innlegg, ${current.likesThisWeek} liker, ${current.commentsThisWeek} kommentarer`;
+  const delta = current.followers - prior.followers;
+  const sign = delta > 0 ? "+" : "";
+  return `  ${label}: ${current.followers} følgere (${sign}${delta} denne uken), ${current.postsThisWeek} nye innlegg, ${current.likesThisWeek} liker, ${current.commentsThisWeek} kommentarer`;
+}
+
+function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup, trends, someReport) {
   const total = leads.length + competitors.length + events.length;
   const lines = [];
   lines.push(`PTP Internal - ukentlig oppsummering`);
   lines.push(``);
+
+  if (someReport) {
+    lines.push(`Sosiale medier denne uken:`);
+    const igLine = growthLine("Instagram", someReport.report.instagram, someReport.prior?.instagram);
+    const fbLine = growthLine("Facebook", someReport.report.facebook, someReport.prior?.facebook);
+    if (igLine) lines.push(igLine);
+    if (fbLine) lines.push(fbLine);
+    lines.push(``);
+  }
 
   if (trends.length) {
     lines.push(`Aktuelle SoMe-trender å vurdere (${trends.length}):`);
@@ -225,9 +392,37 @@ function htmlLeadCard(name, badgeText, badgeColor, sub) {
     </div>`;
 }
 
-function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup, trends) {
+function htmlStatCard(label, current, prior) {
+  if (current == null) return "";
+  let deltaHtml = "";
+  if (prior != null && prior.followers != null) {
+    const delta = current.followers - prior.followers;
+    const sign = delta > 0 ? "+" : "";
+    const color = delta > 0 ? "#3FA873" : delta < 0 ? "#DC2626" : "#6B7280";
+    deltaHtml = `<span style="color:${color};font-weight:600;">${sign}${delta}</span> denne uken`;
+  }
+  return `
+    <div style="padding:14px 16px;border:1px solid #E4E7E5;border-radius:8px;margin-bottom:8px;">
+      <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:#14171A;margin-bottom:4px;">${escapeHtml(label)} — ${current.followers} følgere</div>
+      <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:#6B7280;">${current.postsThisWeek} nye innlegg · ${current.likesThisWeek} liker · ${current.commentsThisWeek} kommentarer${deltaHtml ? " · " + deltaHtml : ""}</div>
+    </div>`;
+}
+
+function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup, trends, someReport) {
   const total = leads.length + competitors.length + events.length;
   let body = "";
+
+  if (someReport) {
+    const chartHtml = someReport.chartBase64
+      ? `<img src="data:image/png;base64,${someReport.chartBase64}" width="500" alt="Følgervekst" style="display:block;width:100%;max-width:500px;height:auto;margin-top:12px;border-radius:8px;" />`
+      : "";
+    body += htmlSection(
+      "Sosiale medier denne uken",
+      htmlStatCard("Instagram", someReport.report.instagram, someReport.prior?.instagram) +
+        htmlStatCard("Facebook", someReport.report.facebook, someReport.prior?.facebook) +
+        chartHtml
+    );
+  }
 
   if (followup.uncontacted.length) {
     body += htmlSection(
@@ -360,15 +555,23 @@ async function main() {
   const followup = buildFollowupSections(leadsData, pipeline || {}, archive || {});
   const trends = await getTrendIdeas();
 
+  const rawReport = await getSocialMediaReport();
+  let someReport = null;
+  if (rawReport) {
+    const { prior, history } = await updateSnapshotsAndGetHistory(rawReport);
+    const chartBase64 = await buildGrowthChartBase64(history);
+    someReport = { report: rawReport, prior, chartBase64 };
+  }
+
   lib.log(
     "digest",
     `Past 7 days: ${grouped.leads.length} lead(s), ${grouped.competitors.length} competitor(s), ${grouped.events.length} event(s). ` +
       `Follow-up: ${followup.uncontacted.length} uncontacted high-score, ${followup.stale.length} stale in pipeline. ` +
-      `Trends: ${trends.length}.`
+      `Trends: ${trends.length}. SoMe report: ${someReport ? "yes" : "skipped"}.`
   );
 
-  const text = buildDigestText(grouped, leadsByOrgnr, followup, trends);
-  const html = buildDigestHtml(grouped, leadsByOrgnr, followup, trends);
+  const text = buildDigestText(grouped, leadsByOrgnr, followup, trends, someReport);
+  const html = buildDigestHtml(grouped, leadsByOrgnr, followup, trends, someReport);
   await sendDigest(text, html);
 }
 
@@ -379,4 +582,16 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildFollowupSections, buildDigestText, buildDigestHtml, enrichLeadLine, categorize, fetchJson, getTrendIdeas };
+module.exports = {
+  buildFollowupSections,
+  buildDigestText,
+  buildDigestHtml,
+  enrichLeadLine,
+  categorize,
+  fetchJson,
+  getTrendIdeas,
+  getSocialMediaReport,
+  updateSnapshotsAndGetHistory,
+  buildGrowthChartBase64,
+  isoWeek,
+};

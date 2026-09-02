@@ -24,4 +24,5 @@ jobs:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           DIGEST_FROM_EMAIL: ${{ secrets.DIGEST_FROM_EMAIL }}
           SITE_BASIC_AUTH: ${{ secrets.SITE_BASIC_AUTH }}
+          META_PAGE_ACCESS_TOKEN: ${{ secrets.META_PAGE_ACCESS_TOKEN }}
         run: node lead-finder/weekly-digest.js
