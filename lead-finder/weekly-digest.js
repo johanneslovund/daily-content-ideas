@@ -972,7 +972,7 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
     HEADER_BG_BASE64 ? `background-image:url(data:image/jpeg;base64,${HEADER_BG_BASE64});background-size:cover;background-position:center;` : ""
   }">
             <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:rgba(11,13,15,0.7);">
-              <tr><td style="padding:28px 32px 20px;">
+              <tr><td style="padding:58px 32px 50px;">
                 ${LOGO_BASE64 ? `<img src="data:image/png;base64,${LOGO_BASE64}" width="120" alt="Palm Tree Productions" style="display:block;width:120px;height:auto;margin:0 auto 14px;" />` : `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${C.greenLight};letter-spacing:0.04em;text-transform:uppercase;text-align:center;">PTP Internal</div>`}
                 <h1 style="margin:0;font:700 22px -apple-system,'Segoe UI',sans-serif;color:#FFFFFF;text-align:center;text-shadow:0 1px 4px rgba(0,0,0,0.6);">Ukentlig oppsummering</h1>
                 <div style="margin-top:4px;font:13px -apple-system,'Segoe UI',sans-serif;color:#D7D9DA;text-align:center;">${escapeHtml(weekRange)}</div>
