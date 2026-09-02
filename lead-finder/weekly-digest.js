@@ -38,6 +38,15 @@ const META_PAGE_ID = "480020255390204";
 const META_IG_ID = "17841413442620055";
 const META_GRAPH_VERSION = "v26.0";
 
+// Gmail read-only access for jl@palmtreeprod.com, via a Google Cloud OAuth
+// Desktop-app client ("PTP Internal Digest") + a stored refresh token. Used to flag
+// inbox threads that genuinely need a reply this week - see getImportantEmailThreads.
+const GMAIL_CLIENT_ID = process.env.GMAIL_CLIENT_ID;
+const GMAIL_CLIENT_SECRET = process.env.GMAIL_CLIENT_SECRET;
+const GMAIL_REFRESH_TOKEN = process.env.GMAIL_REFRESH_TOKEN;
+const GMAIL_ACCOUNT = "jl@palmtreeprod.com";
+const EMAIL_THREAD_MAX_ITEMS = 5;
+
 function loadLeadsData() {
   const p = path.join(lib.WORK_DIR, "source-data", "palmtree-leads-data.json");
   if (!fs.existsSync(p)) return [];
@@ -374,6 +383,151 @@ Tips: <1 konkret, gjennomførbart tips til neste uke>`;
   }
 }
 
+// One access token per run - the refresh token itself doesn't expire on its own
+// (unlike the short-lived access token it produces), so this is the only round-trip
+// needed to get read access to jl@palmtreeprod.com's inbox each week.
+async function getGmailAccessToken() {
+  if (!GMAIL_CLIENT_ID || !GMAIL_CLIENT_SECRET || !GMAIL_REFRESH_TOKEN) return null;
+  try {
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: GMAIL_CLIENT_ID,
+        client_secret: GMAIL_CLIENT_SECRET,
+        refresh_token: GMAIL_REFRESH_TOKEN,
+        grant_type: "refresh_token",
+      }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      lib.log("digest", `Gmail token refresh failed: ${JSON.stringify(body)}`);
+      return null;
+    }
+    return body.access_token;
+  } catch (e) {
+    lib.log("digest", `Gmail token refresh failed: ${e.message}`);
+    return null;
+  }
+}
+
+// Automated/no-reply senders are excluded before anything reaches Claude - these are
+// never "a thread jl needs to respond to," and cutting them here keeps the judging
+// prompt small and focused on real correspondence.
+const AUTOMATED_SENDER_PATTERN = /no-?reply|noreply|do-?not-?reply|notification|mailer-daemon|calendar-notification|@.*\.google\.com/i;
+
+function gmailHeader(headers, name) {
+  return (headers || []).find((h) => h.name.toLowerCase() === name.toLowerCase())?.value || "";
+}
+
+// Candidate threads: inbox activity in the last 7 days, most recent message per
+// thread, excluding ones where jl himself sent the last message (he's not the one
+// who owes a reply there) and obvious automated senders. Capped well before the
+// Claude call to keep the judging prompt small and the run fast.
+async function getGmailCandidateThreads(accessToken) {
+  const listUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(
+    "in:inbox newer_than:7d -category:promotions -category:social"
+  )}&maxResults=40`;
+  const listRes = await fetch(listUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
+  const listBody = await listRes.json();
+  if (!listRes.ok) {
+    lib.log("digest", `Gmail message list failed: ${JSON.stringify(listBody)}`);
+    return [];
+  }
+
+  const messageIds = (listBody.messages || []).map((m) => m.id);
+  const seenThreads = new Set();
+  const candidates = [];
+
+  for (const id of messageIds) {
+    if (candidates.length >= 20) break;
+    const res = await fetch(
+      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${id}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    const msg = await res.json();
+    if (!res.ok || !msg.threadId || seenThreads.has(msg.threadId)) continue;
+    seenThreads.add(msg.threadId);
+
+    const from = gmailHeader(msg.payload?.headers, "From");
+    if (from.toLowerCase().includes(GMAIL_ACCOUNT) || AUTOMATED_SENDER_PATTERN.test(from)) continue;
+
+    candidates.push({
+      threadId: msg.threadId,
+      subject: gmailHeader(msg.payload?.headers, "Subject") || "(uten emne)",
+      from,
+      date: gmailHeader(msg.payload?.headers, "Date"),
+      snippet: msg.snippet || "",
+      link: `https://mail.google.com/mail/u/0/#inbox/${msg.threadId}`,
+    });
+  }
+
+  return candidates;
+}
+
+// Claude judges which of the candidate threads are actually worth flagging - most
+// inbox activity in a week is routine (confirmations, FYIs, threads already
+// resolved) and shouldn't show up as "needs follow-up" just because jl hasn't
+// replied to it yet.
+async function judgeImportantThreads(candidates) {
+  if (!candidates.length) return [];
+
+  const list = candidates
+    .map((c, i) => `${i}. Fra: ${c.from}\n   Emne: ${c.subject}\n   Dato: ${c.date}\n   Utdrag: ${c.snippet}`)
+    .join("\n\n");
+
+  const prompt = `Du vurderer en liste e-posttråder i innboksen til jl@palmtreeprod.com (Johannes, Palm Tree Productions, videoproduksjonsselskap i Ålesund) fra siste 7 dager. For hver tråd er avsenderen den siste personen som skrev - jl har altså ikke svart ennå.
+
+Trådene:
+${list}
+
+Identifiser hvilke av disse som er GENUINT viktige å svare på eller følge opp denne uken - reelle forespørsler, kunde-/samarbeidshenvendelser, tilbud, avtaler, noe som venter på et svar. Ekskluder nyhetsbrev, kvitteringer/fakturaer som ikke krever handling, automatiserte varsler, og tråder som tydelig er avsluttet eller ikke krever noe fra jl.
+
+Svar med KUN gyldig JSON, en liste (maks 5 elementer, viktigst først):
+[
+  {"index": <tallet fra listen over>, "reason": "kort, konkret begrunnelse på norsk, maks 12 ord", "urgency": "høy" eller "middels"}
+]
+Ingen andre felt, ingen markdown, ingen forklaring utenfor JSON-en. Tom liste hvis ingen kvalifiserer.`;
+
+  try {
+    const response = await lib.anthropic.messages.create({
+      model: lib.MODEL,
+      max_tokens: 700,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = response.content.find((b) => b.type === "text")?.text?.trim();
+    if (!text) return [];
+    const judged = lib.parseJson(text);
+    if (!Array.isArray(judged)) return [];
+
+    return judged
+      .map((j) => {
+        const candidate = candidates[j.index];
+        if (!candidate) return null;
+        return { ...candidate, reason: j.reason || "", urgency: j.urgency === "høy" ? "høy" : "middels" };
+      })
+      .filter(Boolean)
+      .slice(0, EMAIL_THREAD_MAX_ITEMS);
+  } catch (e) {
+    lib.log("digest", `Email thread judging skipped (${e.message}).`);
+    return [];
+  }
+}
+
+// Returns [] (section simply omitted) whenever Gmail isn't configured or any step
+// fails - this is enrichment, never something that should block the weekly send.
+async function getImportantEmailThreads() {
+  const accessToken = await getGmailAccessToken();
+  if (!accessToken) return [];
+  try {
+    const candidates = await getGmailCandidateThreads(accessToken);
+    return await judgeImportantThreads(candidates);
+  } catch (e) {
+    lib.log("digest", `Gmail check skipped (${e.message}).`);
+    return [];
+  }
+}
+
 // Finds the snapshot whose actual date is closest to targetDate, but only returns
 // it if within toleranceDays - a snapshot from 2 months ago should never silently
 // stand in for "1 month ago" just because it's the closest thing available.
@@ -654,9 +808,12 @@ function igGrowthLine(current, prior, priorMonth, priorYear) {
 // happen" in a few seconds without scrolling. Priority-ordered: real sales
 // movement first, then new discoveries, then the nearest upcoming event, then
 // social growth - each only included if there's real content behind it.
-function buildTldrHighlights({ leadsCount, competitorsCount, upcomingEventsCount, movements, winLoss, topOpportunity, eventsReminder, someReport }) {
+function buildTldrHighlights({ leadsCount, competitorsCount, upcomingEventsCount, movements, winLoss, topOpportunity, eventsReminder, someReport, emailThreads }) {
   const items = [];
 
+  if (emailThreads && emailThreads.length) {
+    items.push(`${emailThreads.length} e-post${emailThreads.length === 1 ? "" : "er"} trenger oppfølging`);
+  }
   if (movements.length) {
     items.push(`${movements.length} pipeline-bevegelse${movements.length === 1 ? "" : "r"} denne uken`);
   }
@@ -691,7 +848,7 @@ function buildTldrHighlights({ leadsCount, competitorsCount, upcomingEventsCount
   return items.slice(0, 4);
 }
 
-function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth) {
+function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads = []) {
   const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
   const total = leads.length + competitors.length + upcomingEvents.length;
   const lines = [];
@@ -707,6 +864,7 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
     topOpportunity,
     eventsReminder,
     someReport,
+    emailThreads,
   });
   if (highlights.length) {
     lines.push(`Kort oppsummert:`);
@@ -716,6 +874,12 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
 
   if (tokenHealth && !tokenHealth.ok) {
     lines.push(`⚠ ${tokenHealth.reason}`);
+    lines.push(``);
+  }
+
+  if (emailThreads.length) {
+    lines.push(`E-post som trenger oppfølging (${emailThreads.length}):`);
+    emailThreads.forEach((t) => lines.push(`  - [${t.urgency}] ${t.subject} — fra ${t.from} — ${t.reason} — ${t.link}`));
     lines.push(``);
   }
 
@@ -1028,7 +1192,20 @@ function htmlWarningBox(tokenHealth) {
   </td></tr>`;
 }
 
-function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth) {
+function htmlEmailThreadCard(t) {
+  const badgeColor = t.urgency === "høy" ? C.red : "#D9B454";
+  return `
+    <div style="padding:10px 14px;border:1px solid ${C.border};border-radius:8px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <a href="${escapeHtml(t.link)}" style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:${C.heading};text-decoration:none;">${escapeHtml(t.subject)}</a>
+        <span style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${badgeColor};background:${badgeColor}26;padding:4px 10px;border-radius:999px;white-space:nowrap;margin-left:10px;">${escapeHtml(t.urgency)}</span>
+      </div>
+      <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:4px;">${escapeHtml(t.from)}</div>
+      <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};margin-top:4px;">${escapeHtml(t.reason)}</div>
+    </div>`;
+}
+
+function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads = []) {
   const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
   const total = leads.length + competitors.length + upcomingEvents.length;
   let body = "";
@@ -1042,9 +1219,14 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
     topOpportunity,
     eventsReminder,
     someReport,
+    emailThreads,
   });
   body += htmlTldrBox(highlights);
   body += htmlWarningBox(tokenHealth);
+
+  if (emailThreads.length) {
+    body += htmlSection(`E-post som trenger oppfølging (${emailThreads.length})`, emailThreads.map(htmlEmailThreadCard).join(""));
+  }
 
   if (movements.length) {
     body += htmlSection(
@@ -1325,6 +1507,7 @@ async function main() {
     someReport = { report: rawReport, prior, priorMonth, priorYear, chartBase64, analysis };
   }
   const tokenHealth = await checkMetaTokenHealth();
+  const emailThreads = await getImportantEmailThreads();
 
   const weekRange = weekRangeLabel(new Date());
 
@@ -1332,11 +1515,12 @@ async function main() {
     "digest",
     `Past 7 days: ${grouped.leads.length} lead(s), ${grouped.competitors.length} competitor(s), ${grouped.events.length} event(s). ` +
       `Follow-up: ${followup.uncontacted.length} uncontacted high-score, ${followup.stale.length} stale in pipeline. ` +
-      `Trends: ${trends.length}. SoMe report: ${someReport ? "yes" : "skipped"}. Token health: ${tokenHealth ? (tokenHealth.ok ? "ok" : tokenHealth.reason) : "n/a"}.`
+      `Trends: ${trends.length}. SoMe report: ${someReport ? "yes" : "skipped"}. Token health: ${tokenHealth ? (tokenHealth.ok ? "ok" : tokenHealth.reason) : "n/a"}. ` +
+      `Email threads flagged: ${emailThreads.length}.`
   );
 
-  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth);
-  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth);
+  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads);
+  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads);
   await sendDigest(text, html, weekRange);
 }
 
@@ -1373,4 +1557,5 @@ module.exports = {
   getUpcomingEventsReminder,
   checkMetaTokenHealth,
   buildTldrHighlights,
+  getImportantEmailThreads,
 };
