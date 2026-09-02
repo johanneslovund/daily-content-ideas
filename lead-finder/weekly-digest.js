@@ -414,10 +414,10 @@ function followerDeltaText(current, prior, priorMonth, priorYear) {
   const week = followerDelta(current, prior);
   const month = followerDelta(current, priorMonth);
   const year = followerDelta(current, priorYear);
-  const sign = (n) => (n > 0 ? "+" : "");
-  if (week != null) parts.push(`${sign(week)}${week} denne uken`);
-  if (month != null) parts.push(`${sign(month)}${month} siste måned`);
-  if (year != null) parts.push(`${sign(year)}${year} siste år`);
+  const fmt = (n, label) => `${trendArrow(n).arrow} ${n > 0 ? "+" : ""}${n} ${label}`;
+  if (week != null) parts.push(fmt(week, "denne uken"));
+  if (month != null) parts.push(fmt(month, "siste måned"));
+  if (year != null) parts.push(fmt(year, "siste år"));
   return parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(", ")})` : parts[0];
 }
 
@@ -504,9 +504,10 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup,
 // Embedded as base64 rather than a hosted URL: the site sits behind Basic Auth, so
 // email clients (which fetch remote images anonymously) couldn't load it from there
 // without opening a new public exception for a page that's otherwise fully gated.
+// The white/light variant of the logo, since the email is dark mode.
 const LOGO_BASE64 = (() => {
   try {
-    return fs.readFileSync(path.join(__dirname, "assets", "ptp-logo.png")).toString("base64");
+    return fs.readFileSync(path.join(__dirname, "assets", "ptp-logo-white.png")).toString("base64");
   } catch (e) {
     return null;
   }
@@ -520,35 +521,57 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+// Dark-mode palette matching the site's own design system (see CLAUDE.md): body
+// #14171A, card #1B1F23, borders #2A2F35, heading text #F2F3F1, body text #E7E9EA,
+// muted #9AA0A6, accent green #3FA873/#4FBD84, negative red #E58C74.
+const C = {
+  bg: "#14171A",
+  card: "#1B1F23",
+  border: "#2A2F35",
+  heading: "#F2F3F1",
+  body: "#E7E9EA",
+  muted: "#9AA0A6",
+  dim: "#7C8388",
+  green: "#3FA873",
+  greenLight: "#4FBD84",
+  red: "#E58C74",
+};
+
 // Table-based layout with inline styles throughout - required for consistent
 // rendering across email clients (Gmail/Outlook strip <style> blocks and much of
-// modern CSS). Mirrors the site's brand green (#3FA873/#4FBD84) but on a light
-// background, since dark email bodies render inconsistently and read poorly in
-// most inboxes.
+// modern CSS).
 function htmlSection(title, innerHtml) {
   return `
   <tr><td style="padding:28px 32px 8px;">
-    <h2 style="margin:0 0 12px;font:600 15px -apple-system,'Segoe UI',sans-serif;color:#14171A;">${escapeHtml(title)}</h2>
+    <h2 style="margin:0 0 12px;font:600 15px -apple-system,'Segoe UI',sans-serif;color:${C.heading};">${escapeHtml(title)}</h2>
     ${innerHtml}
   </td></tr>`;
 }
 
 function htmlLeadCard(name, badgeText, badgeColor, sub) {
   return `
-    <div style="padding:10px 14px;border:1px solid #E4E7E5;border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
+    <div style="padding:10px 14px;border:1px solid ${C.border};border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
       <div>
-        <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:#14171A;">${escapeHtml(name)}</div>
-        ${sub ? `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:#6B7280;margin-top:2px;">${escapeHtml(sub)}</div>` : ""}
+        <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:${C.heading};">${escapeHtml(name)}</div>
+        ${sub ? `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:2px;">${escapeHtml(sub)}</div>` : ""}
       </div>
-      <span style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${badgeColor};background:${badgeColor}1A;padding:4px 10px;border-radius:999px;white-space:nowrap;">${escapeHtml(badgeText)}</span>
+      <span style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${badgeColor};background:${badgeColor}26;padding:4px 10px;border-radius:999px;white-space:nowrap;">${escapeHtml(badgeText)}</span>
     </div>`;
+}
+
+// Green up-arrow for growth, gray right-arrow for no change, red down-arrow for
+// decline - matching the reference performance-report style the user shared.
+function trendArrow(delta) {
+  if (delta > 0) return { arrow: "↗", color: C.greenLight };
+  if (delta < 0) return { arrow: "↘", color: C.red };
+  return { arrow: "→", color: C.muted };
 }
 
 function deltaSpan(delta, periodLabel) {
   if (delta == null) return "";
   const sign = delta > 0 ? "+" : "";
-  const color = delta > 0 ? "#3FA873" : delta < 0 ? "#DC2626" : "#6B7280";
-  return `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${color};">${sign}${delta} ${periodLabel}</div>`;
+  const { arrow, color } = trendArrow(delta);
+  return `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${color};">${arrow} ${sign}${delta} ${periodLabel}</div>`;
 }
 
 function followerDeltaHtml(current, prior, priorMonth, priorYear) {
@@ -566,9 +589,9 @@ function htmlMetricGrid(platformLabel, items) {
   const cells = items
     .map(
       (item) => `
-      <td width="33%" valign="top" style="padding:12px 10px;border:1px solid #E4E7E5;">
-        <div style="font:12px -apple-system,'Segoe UI',sans-serif;color:#6B7280;text-transform:uppercase;letter-spacing:0.02em;margin-bottom:4px;">${escapeHtml(item.label)}</div>
-        <div style="font:700 20px -apple-system,'Segoe UI',sans-serif;color:#14171A;">${escapeHtml(item.value)}</div>
+      <td width="33%" valign="top" style="padding:12px 10px;border:1px solid ${C.border};">
+        <div style="font:12px -apple-system,'Segoe UI',sans-serif;color:${C.muted};text-transform:uppercase;letter-spacing:0.02em;margin-bottom:4px;">${escapeHtml(item.label)}</div>
+        <div style="font:700 20px -apple-system,'Segoe UI',sans-serif;color:${C.heading};">${escapeHtml(item.value)}</div>
         ${item.deltaHtml ? `<div style="margin-top:2px;">${item.deltaHtml}</div>` : ""}
       </td>`
     );
@@ -576,12 +599,12 @@ function htmlMetricGrid(platformLabel, items) {
   const rows = [];
   for (let i = 0; i < cells.length; i += 3) {
     const rowCells = cells.slice(i, i + 3);
-    while (rowCells.length < 3) rowCells.push(`<td width="33%" style="border:1px solid #E4E7E5;"></td>`);
+    while (rowCells.length < 3) rowCells.push(`<td width="33%" style="border:1px solid ${C.border};"></td>`);
     rows.push(`<tr>${rowCells.join("")}</tr>`);
   }
 
   return `
-    <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:#14171A;margin:16px 0 8px;">${escapeHtml(platformLabel)}</div>
+    <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:${C.heading};margin:16px 0 8px;">${escapeHtml(platformLabel)}</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
       ${rows.join("")}
     </table>`;
@@ -629,20 +652,38 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
       body += htmlSection(
         "Instagram-rapport",
         `
-        <div style="font:13px/1.6 -apple-system,'Segoe UI',sans-serif;color:#374151;">
-          <div style="margin-bottom:8px;"><strong style="color:#3FA873;">Hva funket:</strong> ${escapeHtml(someReport.analysis.worked)}</div>
-          <div style="margin-bottom:8px;"><strong style="color:#DC2626;">Hva funket ikke:</strong> ${escapeHtml(someReport.analysis.didntWork)}</div>
-          <div><strong style="color:#14171A;">Tips:</strong> ${escapeHtml(someReport.analysis.tip)}</div>
+        <div style="font:13px/1.6 -apple-system,'Segoe UI',sans-serif;color:${C.body};">
+          <div style="margin-bottom:8px;"><strong style="color:${C.greenLight};">Hva funket:</strong> ${escapeHtml(someReport.analysis.worked)}</div>
+          <div style="margin-bottom:8px;"><strong style="color:${C.red};">Hva funket ikke:</strong> ${escapeHtml(someReport.analysis.didntWork)}</div>
+          <div><strong style="color:${C.heading};">Tips:</strong> ${escapeHtml(someReport.analysis.tip)}</div>
         </div>`
       );
     }
+
+  }
+
+  // Positioned right after the SoMe report (not nested inside it) so trends still
+  // show even in the rare case the Meta report itself fails to load.
+  if (trends.length) {
+    body += htmlSection(
+      "Aktuelle SoMe-trender å vurdere",
+      trends
+        .map(
+          (t) => `
+      <div style="padding:12px 14px;border:1px solid ${C.border};border-radius:8px;margin-bottom:8px;">
+        <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:${C.greenLight};margin-bottom:4px;">${escapeHtml(t.trend)}</div>
+        <div style="font:13px/1.5 -apple-system,'Segoe UI',sans-serif;color:${C.body};">${escapeHtml(t.idea)}</div>
+      </div>`
+        )
+        .join("")
+    );
   }
 
   if (followup.uncontacted.length) {
     body += htmlSection(
       `Leads å følge opp - ikke kontaktet ennå (${followup.uncontacted.length})`,
       followup.uncontacted
-        .map((l) => htmlLeadCard(l.navn, `score ${l.score}`, "#3FA873", l.fylke || "ukjent fylke"))
+        .map((l) => htmlLeadCard(l.navn, `score ${l.score}`, C.greenLight, l.fylke || "ukjent fylke"))
         .join("")
     );
   }
@@ -651,22 +692,7 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
     body += htmlSection(
       `Leads som har stått stille (${followup.stale.length})`,
       followup.stale
-        .map((l) => htmlLeadCard(l.navn, `${l.days} dager`, "#D97706", `"${l.entry.stage}"`))
-        .join("")
-    );
-  }
-
-  if (trends.length) {
-    body += htmlSection(
-      "Aktuelle SoMe-trender å vurdere",
-      trends
-        .map(
-          (t) => `
-      <div style="padding:12px 14px;border:1px solid #E4E7E5;border-radius:8px;margin-bottom:8px;">
-        <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:#3FA873;margin-bottom:4px;">${escapeHtml(t.trend)}</div>
-        <div style="font:13px/1.5 -apple-system,'Segoe UI',sans-serif;color:#374151;">${escapeHtml(t.idea)}</div>
-      </div>`
-        )
+        .map((l) => htmlLeadCard(l.navn, `${l.days} dager`, "#D9B454", `"${l.entry.stage}"`))
         .join("")
     );
   }
@@ -674,20 +700,20 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
   if (total === 0) {
     body += htmlSection(
       "Nye funn denne uken",
-      `<div style="font:13px/1.5 -apple-system,'Segoe UI',sans-serif;color:#6B7280;">Ingen nye funn denne uken. Automasjonen fant ingenting som var verifiserbart og relevant nok til å legge til - det er en normal og forventet uke, ikke en feil.</div>`
+      `<div style="font:13px/1.5 -apple-system,'Segoe UI',sans-serif;color:${C.muted};">Ingen nye funn denne uken. Automasjonen fant ingenting som var verifiserbart og relevant nok til å legge til - det er en normal og forventet uke, ikke en feil.</div>`
     );
   } else {
     if (leads.length) {
       body += htmlSection(
         `Nye leads (${leads.length})`,
-        leads.map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:#374151;padding:4px 0;">${escapeHtml(enrichLeadLine(c, leadsByOrgnr))}</div>`).join("")
+        leads.map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};padding:4px 0;">${escapeHtml(enrichLeadLine(c, leadsByOrgnr))}</div>`).join("")
       );
     }
     if (competitors.length) {
       body += htmlSection(
         `Nye konkurrenter (${competitors.length})`,
         competitors
-          .map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:#374151;padding:4px 0;">${escapeHtml(c.replace(/^Add competitor:\s*/, ""))}</div>`)
+          .map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};padding:4px 0;">${escapeHtml(c.replace(/^Add competitor:\s*/, ""))}</div>`)
           .join("")
       );
     }
@@ -695,7 +721,7 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
       body += htmlSection(
         `Nye event (${events.length})`,
         events
-          .map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:#374151;padding:4px 0;">${escapeHtml(c.replace(/^Add event:\s*/, ""))}</div>`)
+          .map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};padding:4px 0;">${escapeHtml(c.replace(/^Add event:\s*/, ""))}</div>`)
           .join("")
       );
     }
@@ -706,18 +732,20 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="supported-color-schemes" content="dark" />
   </head>
-  <body style="margin:0;padding:0;background:#F5F6F5;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5F6F5;padding:24px 0;">
+  <body style="margin:0;padding:0;background:${C.bg};">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.bg};padding:24px 0;">
       <tr><td align="center">
-        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border-radius:12px;overflow:hidden;max-width:600px;width:100%;">
-          <tr><td style="padding:28px 32px 20px;border-bottom:3px solid #3FA873;">
-            ${LOGO_BASE64 ? `<img src="data:image/png;base64,${LOGO_BASE64}" width="120" alt="Palm Tree Productions" style="display:block;width:120px;height:auto;margin:0 auto 14px;" />` : `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:#3FA873;letter-spacing:0.04em;text-transform:uppercase;text-align:center;">PTP Internal</div>`}
-            <h1 style="margin:0;font:700 22px -apple-system,'Segoe UI',sans-serif;color:#14171A;">Ukentlig oppsummering</h1>
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:${C.card};border-radius:12px;overflow:hidden;max-width:600px;width:100%;">
+          <tr><td style="padding:28px 32px 20px;border-bottom:3px solid ${C.green};">
+            ${LOGO_BASE64 ? `<img src="data:image/png;base64,${LOGO_BASE64}" width="120" alt="Palm Tree Productions" style="display:block;width:120px;height:auto;margin:0 auto 14px;" />` : `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${C.greenLight};letter-spacing:0.04em;text-transform:uppercase;text-align:center;">PTP Internal</div>`}
+            <h1 style="margin:0;font:700 22px -apple-system,'Segoe UI',sans-serif;color:${C.heading};text-align:center;">Ukentlig oppsummering</h1>
           </td></tr>
           ${body}
           <tr><td style="padding:24px 32px 32px;">
-            <a href="${SITE_URL}" style="display:inline-block;font:600 13px -apple-system,'Segoe UI',sans-serif;color:#FFFFFF;background:#3FA873;padding:10px 18px;border-radius:8px;text-decoration:none;">Åpne ptp-internal</a>
+            <a href="${SITE_URL}" style="display:inline-block;font:600 13px -apple-system,'Segoe UI',sans-serif;color:#0B0D0F;background:${C.greenLight};padding:10px 18px;border-radius:8px;text-decoration:none;">Åpne ptp-internal</a>
           </td></tr>
         </table>
       </td></tr>
