@@ -303,7 +303,7 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
       <tr><td align="center">
         <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border-radius:12px;overflow:hidden;max-width:600px;width:100%;">
           <tr><td style="padding:28px 32px 20px;border-bottom:3px solid #3FA873;">
-            ${LOGO_BASE64 ? `<img src="data:image/png;base64,${LOGO_BASE64}" width="120" alt="Palm Tree Productions" style="display:block;width:120px;height:auto;margin-bottom:14px;" />` : `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:#3FA873;letter-spacing:0.04em;text-transform:uppercase;">PTP Internal</div>`}
+            ${LOGO_BASE64 ? `<img src="data:image/png;base64,${LOGO_BASE64}" width="120" alt="Palm Tree Productions" style="display:block;width:120px;height:auto;margin:0 auto 14px;" />` : `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:#3FA873;letter-spacing:0.04em;text-transform:uppercase;text-align:center;">PTP Internal</div>`}
             <h1 style="margin:0;font:700 22px -apple-system,'Segoe UI',sans-serif;color:#14171A;">Ukentlig oppsummering</h1>
           </td></tr>
           ${body}
