@@ -487,6 +487,56 @@ function getPipelineMovements(pipeline, leadsData) {
   return movements;
 }
 
+// Counts real transitions INTO "vunnet"/"tapt" within the window, from the same
+// per-lead history log as getPipelineMovements - not just whatever the CURRENT
+// stage happens to be, since a lead could have moved on since the win/loss.
+function getWinLossTally(pipeline, days = 30) {
+  const cutoff = Date.now() - days * 86400000;
+  let won = 0;
+  let lost = 0;
+  for (const entry of Object.values(pipeline || {})) {
+    for (const h of entry.history || []) {
+      if (new Date(h.ts).getTime() >= cutoff) {
+        if (h.stage === "vunnet") won++;
+        else if (h.stage === "tapt") lost++;
+      }
+    }
+  }
+  return { won, lost, days };
+}
+
+// The highest-scoring lead currently sitting in "tilbud" (the stage right before
+// a decision) - a quick pointer to the single opportunity most worth not dropping,
+// rather than the full uncontacted/stale lists which are about coverage, not size.
+function getTopOpportunity(pipeline, leadsData) {
+  const inTilbud = Object.entries(pipeline || {})
+    .filter(([, entry]) => entry.stage === "tilbud")
+    .map(([orgnr]) => leadsData.find((l) => l.orgnr === orgnr))
+    .filter((l) => l && typeof l.score === "number");
+  if (!inTilbud.length) return null;
+  return inTilbud.sort((a, b) => b.score - a.score)[0];
+}
+
+// Events happening in the next `daysAhead` days, regardless of when they were
+// first discovered - a forward-looking reminder, distinct from "Nye event" (which
+// is only ever about events added to tracking in the past 7 days).
+function getUpcomingEventsReminder(eventsData, daysAhead = 14) {
+  const todayStart = new Date(new Date().toDateString());
+  const cutoff = new Date(todayStart.getTime() + daysAhead * 86400000);
+  return eventsData
+    .filter((e) => {
+      const start = new Date(e.startDato);
+      return !Number.isNaN(start.getTime()) && start >= todayStart && start <= cutoff;
+    })
+    .sort((a, b) => new Date(a.startDato) - new Date(b.startDato));
+}
+
+function daysUntil(dateStr) {
+  const target = new Date(dateStr);
+  const todayStart = new Date(new Date().toDateString());
+  return Math.round((target.getTime() - todayStart.getTime()) / 86400000);
+}
+
 function getWeekCommits() {
   const log = execSync('git log --since="7 days ago" --pretty=format:"%s"', {
     cwd: lib.WORK_DIR,
@@ -564,7 +614,7 @@ function igGrowthLine(current, prior, priorMonth, priorYear) {
   return `  Instagram${handle}: ${parts.join(", ")}`;
 }
 
-function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements) {
+function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder) {
   const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
   const total = leads.length + competitors.length + upcomingEvents.length;
   const lines = [];
@@ -574,6 +624,27 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
   if (movements.length) {
     lines.push(`Pipeline-bevegelse denne uken (${movements.length}):`);
     movements.forEach((m) => lines.push(`  - ${m.navn} → ${STAGE_LABELS[m.stage] || m.stage} (${formatDateNo(new Date(m.ts))}${m.user ? `, ${m.user}` : ""})`));
+    lines.push(``);
+  }
+
+  if (winLoss.won > 0 || winLoss.lost > 0) {
+    lines.push(`Vunnet/tapt siste ${winLoss.days} dager: ${winLoss.won} vunnet, ${winLoss.lost} tapt`);
+    lines.push(``);
+  }
+
+  if (topOpportunity) {
+    lines.push(`Størst mulighet akkurat nå: ${topOpportunity.navn} — score ${topOpportunity.score}, i "Tilbud"-fasen`);
+    lines.push(``);
+  }
+
+  if (eventsReminder.length) {
+    lines.push(`Kommende event (neste 14 dager):`);
+    eventsReminder.forEach((e) => {
+      const days = daysUntil(e.startDato);
+      lines.push(`  - ${e.navn} — ${formatDateNo(new Date(e.startDato))} (om ${days} dag${days === 1 ? "" : "er"})`);
+      const synopsis = shortSynopsis(e.beskrivelse);
+      if (synopsis) lines.push(`    ${synopsis}`);
+    });
     lines.push(``);
   }
 
@@ -832,7 +903,7 @@ function htmlInstagramStatCard(current, prior, priorMonth, priorYear) {
   return htmlMetricGrid(`Instagram${handle}`, items);
 }
 
-function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements) {
+function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder) {
   const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
   const total = leads.length + competitors.length + upcomingEvents.length;
   let body = "";
@@ -842,6 +913,37 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
       `Pipeline-bevegelse denne uken (${movements.length})`,
       movements
         .map((m) => htmlLeadCard(m.navn, STAGE_LABELS[m.stage] || m.stage, stageColor(m.stage), `${formatDateNo(new Date(m.ts))}${m.user ? ` · ${m.user}` : ""}`))
+        .join("")
+    );
+  }
+
+  if (winLoss.won > 0 || winLoss.lost > 0) {
+    body += htmlSection(
+      `Vunnet/tapt siste ${winLoss.days} dager`,
+      `<div style="font:14px -apple-system,'Segoe UI',sans-serif;color:${C.body};">
+        <span style="color:${C.greenLight};font-weight:700;">${winLoss.won} vunnet</span>
+        <span style="color:${C.muted};"> · </span>
+        <span style="color:${C.red};font-weight:700;">${winLoss.lost} tapt</span>
+      </div>`
+    );
+  }
+
+  if (topOpportunity) {
+    body += htmlSection(
+      "Størst mulighet akkurat nå",
+      htmlLeadCard(topOpportunity.navn, `score ${topOpportunity.score}`, "#D9B454", "I “Tilbud”-fasen")
+    );
+  }
+
+  if (eventsReminder.length) {
+    body += htmlSection(
+      "Kommende event (neste 14 dager)",
+      eventsReminder
+        .map((e) => {
+          const days = daysUntil(e.startDato);
+          const synopsis = shortSynopsis(e.beskrivelse);
+          return htmlLeadCard(e.navn, `om ${days} dag${days === 1 ? "" : "er"}`, C.greenLight, `${formatDateNo(new Date(e.startDato))}${synopsis ? ` · ${synopsis}` : ""}`);
+        })
         .join("")
     );
   }
@@ -1045,6 +1147,9 @@ async function main() {
   ]);
   const followup = buildFollowupSections(leadsData, pipeline || {}, archive || {});
   const movements = getPipelineMovements(pipeline || {}, leadsData);
+  const winLoss = getWinLossTally(pipeline || {});
+  const topOpportunity = getTopOpportunity(pipeline || {}, leadsData);
+  const eventsReminder = getUpcomingEventsReminder(eventsData);
   const trends = await getTrendIdeas();
 
   const rawReport = await getSocialMediaReport();
@@ -1064,8 +1169,8 @@ async function main() {
       `Trends: ${trends.length}. SoMe report: ${someReport ? "yes" : "skipped"}.`
   );
 
-  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements);
-  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements);
+  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder);
+  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder);
   await sendDigest(text, html, weekRange);
 }
 
@@ -1096,4 +1201,7 @@ module.exports = {
   isEventUpcoming,
   getCompetitorUrl,
   getPipelineMovements,
+  getWinLossTally,
+  getTopOpportunity,
+  getUpcomingEventsReminder,
 };
