@@ -58,10 +58,47 @@ function getLeadSynopsis(commitMsg, leadsByOrgnr) {
   return shortSynopsis(lead?.begrunnelse);
 }
 
+function eventNameFromCommit(commitMsg) {
+  return commitMsg.replace(/^Add event:\s*/, "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+}
+
 function getEventSynopsis(commitMsg, eventsByName) {
-  const name = commitMsg.replace(/^Add event:\s*/, "").replace(/\s*\([^)]*\)\s*$/, "").trim();
-  const event = eventsByName.get(name);
+  const event = eventsByName.get(eventNameFromCommit(commitMsg));
   return shortSynopsis(event?.beskrivelse);
+}
+
+// Filters out events that have already concluded by the time the digest sends -
+// a newly-discovered event isn't relevant in a forward-looking newsletter once
+// it's over. Fails open (keeps the event) if we can't find its data or a date,
+// rather than silently dropping something we can't actually verify is past.
+function isEventUpcoming(commitMsg, eventsByName) {
+  const event = eventsByName.get(eventNameFromCommit(commitMsg));
+  const endStr = event?.sluttDato || event?.startDato;
+  if (!endStr) return true;
+  const end = new Date(endStr);
+  if (Number.isNaN(end.getTime())) return true;
+  const todayStart = new Date(new Date().toDateString());
+  return end >= todayStart;
+}
+
+// The Konkurranse automation already stores a real website URL per competitor, but
+// only inline in the public Konkurranse page's HTML (no separate JSON sidecar like
+// leads/events have) - this pulls it back out for the digest rather than
+// duplicating storage.
+function getCompetitorUrl(commitMsg) {
+  const name = commitMsg.replace(/^Add competitor:\s*/, "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+  try {
+    const htmlPath = path.join(lib.WORK_DIR, "public", "Palm Tree Konkurranse.html");
+    if (!fs.existsSync(htmlPath)) return null;
+    const html = fs.readFileSync(htmlPath, "utf8");
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const rowMatch = html.match(new RegExp(`<tr>[\\s\\S]*?company-name">${escapedName}<[\\s\\S]*?</tr>`));
+    if (!rowMatch) return null;
+    const urlMatch = rowMatch[0].match(/link-chip"\s+href="([^"]+)"/);
+    return urlMatch ? urlMatch[1] : null;
+  } catch (e) {
+    return null;
+  }
 }
 
 // The whole site (including these GET endpoints) sits behind site-wide Basic Auth
@@ -210,7 +247,9 @@ async function getSocialMediaReport() {
 
   if (!igAccount && !fbPage) return null;
 
+  const monthAgoMs = Date.now() - 30 * 86400000;
   const igRecent = (igMedia?.data || []).filter((m) => new Date(m.timestamp).getTime() >= weekAgoMs);
+  const igRecentMonth = (igMedia?.data || []).filter((m) => new Date(m.timestamp).getTime() >= monthAgoMs);
   const fbRecent = (fbPosts?.data || []).filter((p) => new Date(p.created_time).getTime() >= weekAgoMs);
 
   const instagramPosts = igRecent.map((m) => ({
@@ -225,6 +264,7 @@ async function getSocialMediaReport() {
         username: igAccount.username || null,
         followers: igAccount.followers_count ?? null,
         postsThisWeek: igRecent.length,
+        postsThisMonth: igRecentMonth.length,
         week: igWeek,
         priorWeek: igPriorWeek,
         month: igMonth,
@@ -494,7 +534,8 @@ function igGrowthLine(current, prior, priorMonth, priorYear) {
 }
 
 function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange) {
-  const total = leads.length + competitors.length + events.length;
+  const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
+  const total = leads.length + competitors.length + upcomingEvents.length;
   const lines = [];
   lines.push(`PTP Internal - ukentlig oppsummering (${weekRange})`);
   lines.push(``);
@@ -502,7 +543,7 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
   if (someReport) {
     lines.push(`Sosiale medier denne uken:`);
     const igLine = igGrowthLine(someReport.report.instagram, someReport.prior?.instagram, someReport.priorMonth?.instagram, someReport.priorYear?.instagram);
-    const fbLine = fbGrowthLine("Facebook", someReport.report.facebook, someReport.prior?.facebook, someReport.priorMonth?.facebook, someReport.priorYear?.facebook);
+    const fbLine = fbGrowthLine("Facebook - PTP (7 dager)", someReport.report.facebook, someReport.prior?.facebook, someReport.priorMonth?.facebook, someReport.priorYear?.facebook);
     if (igLine) lines.push(igLine);
     if (fbLine) lines.push(fbLine);
     lines.push(``);
@@ -548,12 +589,15 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
     }
     if (competitors.length) {
       lines.push(`Nye konkurrenter (${competitors.length}):`);
-      competitors.forEach((c) => lines.push(`  - ${c.replace(/^Add competitor:\s*/, "")}`));
+      competitors.forEach((c) => {
+        const url = getCompetitorUrl(c);
+        lines.push(`  - ${c.replace(/^Add competitor:\s*/, "")}${url ? ` — ${url}` : ""}`);
+      });
       lines.push(``);
     }
-    if (events.length) {
-      lines.push(`Nye event (${events.length}):`);
-      events.forEach((c) => {
+    if (upcomingEvents.length) {
+      lines.push(`Nye event (${upcomingEvents.length}):`);
+      upcomingEvents.forEach((c) => {
         lines.push(`  - ${c.replace(/^Add event:\s*/, "")}`);
         const synopsis = getEventSynopsis(c, eventsByName);
         if (synopsis) lines.push(`    ${synopsis}`);
@@ -695,43 +739,54 @@ function windowDeltaHtml(value, priorValue) {
   return `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${color};">${arrow} ${sign}${delta} fra uken før</div>`;
 }
 
-// Real email clients (Gmail included, which is what this audience uses) don't run
-// JS and don't reliably support the CSS radio-button "fake tabs" trick, so instead
-// of interactive tabs this shows "this week" (with a week-over-week arrow) and
-// "last 30 days" as two clearly-labeled stacked grids - same information, without
-// relying on interactivity that would silently break for the actual recipients.
+// The 30-day figure for each metric shown as a small reference line under the
+// weekly number - a neutral arrow (this isn't a growth comparison, just a wider
+// window for context) rather than the colored trend arrows used for real deltas.
+function monthSubline(monthValue) {
+  return `<div style="font:11px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:2px;">→ ${monthValue} siste 30 dager</div>`;
+}
+
+// One merged grid per metric - the weekly number (with a week-over-week arrow where
+// a prior-week figure exists) and the 30-day figure stacked underneath, rather than
+// two separate grids repeating the same metric labels.
 function htmlInstagramStatCard(current, prior, priorMonth, priorYear) {
   if (current == null) return "";
   const handle = current.username ? ` (@${escapeHtml(current.username)})` : "";
 
-  const weekItems = [
+  const items = [
     { label: "Følgere", value: String(current.followers), deltaHtml: followerDeltaHtml(current, prior, priorMonth, priorYear) },
-    { label: "Nye innlegg", value: String(current.postsThisWeek) },
-    { label: "Rekkevidde", value: String(current.week.reach), deltaHtml: windowDeltaHtml(current.week.reach, current.priorWeek?.reach) },
-    { label: "Liker", value: String(current.week.likes), deltaHtml: windowDeltaHtml(current.week.likes, current.priorWeek?.likes) },
-    { label: "Kommentarer", value: String(current.week.comments), deltaHtml: windowDeltaHtml(current.week.comments, current.priorWeek?.comments) },
-    { label: "Total interaksjon", value: String(current.week.totalInteractions) },
-    { label: "Lagringer", value: String(current.week.saved) },
-    { label: "Delinger", value: String(current.week.shares) },
+    {
+      label: "Nye innlegg",
+      value: String(current.postsThisWeek),
+      deltaHtml: current.postsThisMonth != null ? monthSubline(current.postsThisMonth) : "",
+    },
+    {
+      label: "Rekkevidde",
+      value: String(current.week.reach),
+      deltaHtml: windowDeltaHtml(current.week.reach, current.priorWeek?.reach) + monthSubline(current.month.reach),
+    },
+    {
+      label: "Liker",
+      value: String(current.week.likes),
+      deltaHtml: windowDeltaHtml(current.week.likes, current.priorWeek?.likes) + monthSubline(current.month.likes),
+    },
+    {
+      label: "Kommentarer",
+      value: String(current.week.comments),
+      deltaHtml: windowDeltaHtml(current.week.comments, current.priorWeek?.comments) + monthSubline(current.month.comments),
+    },
+    { label: "Total interaksjon", value: String(current.week.totalInteractions), deltaHtml: monthSubline(current.month.totalInteractions) },
+    { label: "Lagringer", value: String(current.week.saved), deltaHtml: monthSubline(current.month.saved) },
+    { label: "Delinger", value: String(current.week.shares), deltaHtml: monthSubline(current.month.shares) },
     { label: "Profilbesøk", value: String(current.week.profileViews) },
   ];
 
-  const monthItems = [
-    { label: "Rekkevidde", value: String(current.month.reach) },
-    { label: "Liker", value: String(current.month.likes) },
-    { label: "Kommentarer", value: String(current.month.comments) },
-    { label: "Total interaksjon", value: String(current.month.totalInteractions) },
-    { label: "Lagringer", value: String(current.month.saved) },
-    { label: "Delinger", value: String(current.month.shares) },
-  ];
-
-  return `
-    ${htmlMetricGrid(`Instagram${handle} — denne uken`, weekItems)}
-    ${htmlMetricGrid("Instagram — siste 30 dager", monthItems)}`;
+  return htmlMetricGrid(`Instagram${handle}`, items);
 }
 
 function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange) {
-  const total = leads.length + competitors.length + events.length;
+  const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
+  const total = leads.length + competitors.length + upcomingEvents.length;
   let body = "";
 
   if (someReport) {
@@ -741,7 +796,7 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
     body += htmlSection(
       "Sosiale medier denne uken",
       htmlInstagramStatCard(someReport.report.instagram, someReport.prior?.instagram, someReport.priorMonth?.instagram, someReport.priorYear?.instagram) +
-        htmlStatCard("Facebook", someReport.report.facebook, someReport.prior?.facebook, someReport.priorMonth?.facebook, someReport.priorYear?.facebook) +
+        htmlStatCard("Facebook - PTP (7 dager)", someReport.report.facebook, someReport.prior?.facebook, someReport.priorMonth?.facebook, someReport.priorYear?.facebook) +
         chartHtml
     );
 
@@ -818,14 +873,20 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
       body += htmlSection(
         `Nye konkurrenter (${competitors.length})`,
         competitors
-          .map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};padding:4px 0;">${escapeHtml(c.replace(/^Add competitor:\s*/, ""))}</div>`)
+          .map((c) => {
+            const url = getCompetitorUrl(c);
+            const name = c.replace(/^Add competitor:\s*/, "");
+            return `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};padding:4px 0;">${escapeHtml(name)}${
+              url ? ` — <a href="${escapeHtml(url)}" style="color:${C.greenLight};">Nettside ↗</a>` : ""
+            }</div>`;
+          })
           .join("")
       );
     }
-    if (events.length) {
+    if (upcomingEvents.length) {
       body += htmlSection(
-        `Nye event (${events.length})`,
-        events
+        `Nye event (${upcomingEvents.length})`,
+        upcomingEvents
           .map((c) => {
             const synopsis = getEventSynopsis(c, eventsByName);
             return `<div style="padding:4px 0;">
@@ -968,4 +1029,6 @@ module.exports = {
   loadEventsData,
   getLeadSynopsis,
   getEventSynopsis,
+  isEventUpcoming,
+  getCompetitorUrl,
 };
