@@ -456,6 +456,37 @@ function buildFollowupSections(leadsData, pipeline, archive) {
   return { uncontacted, stale };
 }
 
+const STAGE_LABELS = { kontaktet: "Kontaktet", mote: "Møte", tilbud: "Tilbud", vunnet: "Vunnet", tapt: "Tapt" };
+// A function (not a const object) so it's safe to reference C.* regardless of
+// declaration order in the file - C isn't defined until further down.
+function stageColor(stage) {
+  return { vunnet: C.greenLight, tapt: C.red, tilbud: "#D9B454" }[stage] || C.muted;
+}
+
+// Real stage-change activity this week (a lead got contacted, moved to a meeting,
+// a bid was lost, etc.) - pipeline.js keeps a per-lead history of every stage
+// transition with its own timestamp, so this isn't inferred from anything, it's
+// reading the actual change log. Only shown when something genuinely happened.
+function getPipelineMovements(pipeline, leadsData) {
+  const weekAgo = Date.now() - 7 * 86400000;
+  const movements = [];
+  for (const [orgnr, entry] of Object.entries(pipeline || {})) {
+    for (const h of entry.history || []) {
+      if (new Date(h.ts).getTime() >= weekAgo) {
+        movements.push({
+          orgnr,
+          navn: leadsData.find((l) => l.orgnr === orgnr)?.navn || orgnr,
+          stage: h.stage,
+          ts: h.ts,
+          user: h.user,
+        });
+      }
+    }
+  }
+  movements.sort((a, b) => new Date(b.ts) - new Date(a.ts));
+  return movements;
+}
+
 function getWeekCommits() {
   const log = execSync('git log --since="7 days ago" --pretty=format:"%s"', {
     cwd: lib.WORK_DIR,
@@ -533,12 +564,18 @@ function igGrowthLine(current, prior, priorMonth, priorYear) {
   return `  Instagram${handle}: ${parts.join(", ")}`;
 }
 
-function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange) {
+function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements) {
   const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
   const total = leads.length + competitors.length + upcomingEvents.length;
   const lines = [];
   lines.push(`PTP Internal - ukentlig oppsummering (${weekRange})`);
   lines.push(``);
+
+  if (movements.length) {
+    lines.push(`Pipeline-bevegelse denne uken (${movements.length}):`);
+    movements.forEach((m) => lines.push(`  - ${m.navn} → ${STAGE_LABELS[m.stage] || m.stage} (${formatDateNo(new Date(m.ts))}${m.user ? `, ${m.user}` : ""})`));
+    lines.push(``);
+  }
 
   if (someReport) {
     lines.push(`Sosiale medier denne uken:`);
@@ -618,6 +655,17 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
 const LOGO_BASE64 = (() => {
   try {
     return fs.readFileSync(path.join(__dirname, "assets", "ptp-logo-white.png")).toString("base64");
+  } catch (e) {
+    return null;
+  }
+})();
+
+// Resized/compressed copy of assets/Header.jpg (originally 1640x614, ~240KB) down
+// to 900px wide at quality 68 (~43KB) - keeps the combined email size reasonable
+// once base64-encoded alongside the logo.
+const HEADER_BG_BASE64 = (() => {
+  try {
+    return fs.readFileSync(path.join(__dirname, "assets", "header-bg.jpg")).toString("base64");
   } catch (e) {
     return null;
   }
@@ -784,10 +832,19 @@ function htmlInstagramStatCard(current, prior, priorMonth, priorYear) {
   return htmlMetricGrid(`Instagram${handle}`, items);
 }
 
-function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange) {
+function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements) {
   const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
   const total = leads.length + competitors.length + upcomingEvents.length;
   let body = "";
+
+  if (movements.length) {
+    body += htmlSection(
+      `Pipeline-bevegelse denne uken (${movements.length})`,
+      movements
+        .map((m) => htmlLeadCard(m.navn, STAGE_LABELS[m.stage] || m.stage, stageColor(m.stage), `${formatDateNo(new Date(m.ts))}${m.user ? ` · ${m.user}` : ""}`))
+        .join("")
+    );
+  }
 
   if (someReport) {
     const chartHtml = someReport.chartBase64
@@ -911,10 +968,16 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${C.bg};padding:24px 0;">
       <tr><td align="center">
         <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:${C.card};border-radius:12px;overflow:hidden;max-width:600px;width:100%;">
-          <tr><td style="padding:28px 32px 20px;border-bottom:3px solid ${C.green};">
-            ${LOGO_BASE64 ? `<img src="data:image/png;base64,${LOGO_BASE64}" width="120" alt="Palm Tree Productions" style="display:block;width:120px;height:auto;margin:0 auto 14px;" />` : `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${C.greenLight};letter-spacing:0.04em;text-transform:uppercase;text-align:center;">PTP Internal</div>`}
-            <h1 style="margin:0;font:700 22px -apple-system,'Segoe UI',sans-serif;color:${C.heading};text-align:center;">Ukentlig oppsummering</h1>
-            <div style="margin-top:4px;font:13px -apple-system,'Segoe UI',sans-serif;color:${C.muted};text-align:center;">${escapeHtml(weekRange)}</div>
+          <tr><td${HEADER_BG_BASE64 ? ` background="data:image/jpeg;base64,${HEADER_BG_BASE64}"` : ""} style="border-bottom:3px solid ${C.green};${
+    HEADER_BG_BASE64 ? `background-image:url(data:image/jpeg;base64,${HEADER_BG_BASE64});background-size:cover;background-position:center;` : ""
+  }">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:rgba(11,13,15,0.7);">
+              <tr><td style="padding:28px 32px 20px;">
+                ${LOGO_BASE64 ? `<img src="data:image/png;base64,${LOGO_BASE64}" width="120" alt="Palm Tree Productions" style="display:block;width:120px;height:auto;margin:0 auto 14px;" />` : `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${C.greenLight};letter-spacing:0.04em;text-transform:uppercase;text-align:center;">PTP Internal</div>`}
+                <h1 style="margin:0;font:700 22px -apple-system,'Segoe UI',sans-serif;color:#FFFFFF;text-align:center;text-shadow:0 1px 4px rgba(0,0,0,0.6);">Ukentlig oppsummering</h1>
+                <div style="margin-top:4px;font:13px -apple-system,'Segoe UI',sans-serif;color:#D7D9DA;text-align:center;">${escapeHtml(weekRange)}</div>
+              </td></tr>
+            </table>
           </td></tr>
           ${body}
           <tr><td style="padding:24px 32px 32px;">
@@ -981,6 +1044,7 @@ async function main() {
     fetchJson(`${SITE_URL}/api/lead-archive`),
   ]);
   const followup = buildFollowupSections(leadsData, pipeline || {}, archive || {});
+  const movements = getPipelineMovements(pipeline || {}, leadsData);
   const trends = await getTrendIdeas();
 
   const rawReport = await getSocialMediaReport();
@@ -1000,8 +1064,8 @@ async function main() {
       `Trends: ${trends.length}. SoMe report: ${someReport ? "yes" : "skipped"}.`
   );
 
-  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange);
-  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange);
+  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements);
+  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements);
   await sendDigest(text, html, weekRange);
 }
 
@@ -1031,4 +1095,5 @@ module.exports = {
   getEventSynopsis,
   isEventUpcoming,
   getCompetitorUrl,
+  getPipelineMovements,
 };
