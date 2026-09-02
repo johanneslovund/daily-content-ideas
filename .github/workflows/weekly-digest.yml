@@ -2,10 +2,10 @@ name: Weekly Digest Email
 
 on:
   schedule:
-    # 04:15 UTC Monday = 06:15 Norway time during CEST - after the Konkurranse/Event
+    # 08:00 UTC Monday = 10:00 Norway time during CEST - well after the Konkurranse/Event
     # weekly jobs (05:30/05:45) so the digest can include that morning's results too.
-    # Bump to 05:15 UTC once DST ends in late October.
-    - cron: "15 4 * * 1"
+    # Bump to 09:00 UTC once DST ends in late October.
+    - cron: "0 8 * * 1"
   workflow_dispatch: {}
 
 jobs:
