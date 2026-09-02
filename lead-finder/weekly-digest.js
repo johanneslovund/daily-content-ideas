@@ -182,6 +182,17 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup,
   return lines.join("\n");
 }
 
+// Embedded as base64 rather than a hosted URL: the site sits behind Basic Auth, so
+// email clients (which fetch remote images anonymously) couldn't load it from there
+// without opening a new public exception for a page that's otherwise fully gated.
+const LOGO_BASE64 = (() => {
+  try {
+    return fs.readFileSync(path.join(__dirname, "assets", "ptp-logo.png")).toString("base64");
+  } catch (e) {
+    return null;
+  }
+})();
+
 function escapeHtml(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -291,9 +302,9 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F5F6F5;padding:24px 0;">
       <tr><td align="center">
         <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:#FFFFFF;border-radius:12px;overflow:hidden;max-width:600px;width:100%;">
-          <tr><td style="padding:32px 32px 20px;border-bottom:3px solid #3FA873;">
-            <div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:#3FA873;letter-spacing:0.04em;text-transform:uppercase;">PTP Internal</div>
-            <h1 style="margin:4px 0 0;font:700 22px -apple-system,'Segoe UI',sans-serif;color:#14171A;">Ukentlig oppsummering</h1>
+          <tr><td style="padding:28px 32px 20px;border-bottom:3px solid #3FA873;">
+            ${LOGO_BASE64 ? `<img src="data:image/png;base64,${LOGO_BASE64}" width="120" alt="Palm Tree Productions" style="display:block;width:120px;height:auto;margin-bottom:14px;" />` : `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:#3FA873;letter-spacing:0.04em;text-transform:uppercase;">PTP Internal</div>`}
+            <h1 style="margin:0;font:700 22px -apple-system,'Segoe UI',sans-serif;color:#14171A;">Ukentlig oppsummering</h1>
           </td></tr>
           ${body}
           <tr><td style="padding:24px 32px 32px;">
