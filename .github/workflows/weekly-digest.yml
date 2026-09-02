@@ -23,4 +23,5 @@ jobs:
           PTP_SITE_DEPLOY_KEY: ${{ secrets.PTP_SITE_DEPLOY_KEY }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           DIGEST_FROM_EMAIL: ${{ secrets.DIGEST_FROM_EMAIL }}
+          SITE_BASIC_AUTH: ${{ secrets.SITE_BASIC_AUTH }}
         run: node lead-finder/weekly-digest.js
