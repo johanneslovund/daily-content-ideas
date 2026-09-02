@@ -1165,9 +1165,10 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
           .map((c) => {
             const url = getCompetitorUrl(c);
             const name = c.replace(/^Add competitor:\s*/, "");
-            return `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};padding:4px 0;">${escapeHtml(name)}${
-              url ? ` — <a href="${escapeHtml(url)}" style="color:${C.greenLight};">Nettside ↗</a>` : ""
-            }</div>`;
+            const nameHtml = url
+              ? `<a href="${escapeHtml(url)}" style="color:${C.body};text-decoration:underline;text-decoration-color:${C.border};">${escapeHtml(name)}</a>`
+              : escapeHtml(name);
+            return `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};padding:4px 0;">${nameHtml}</div>`;
           })
           .join(""),
         KONKURRANSE_URL
@@ -1180,10 +1181,12 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
           .map((c) => {
             const synopsis = getEventSynopsis(c, eventsByName);
             const url = getEventUrl(c, eventsByName);
+            const name = c.replace(/^Add event:\s*/, "");
+            const nameHtml = url
+              ? `<a href="${escapeHtml(url)}" style="color:${C.body};text-decoration:underline;text-decoration-color:${C.border};">${escapeHtml(name)}</a>`
+              : escapeHtml(name);
             return `<div style="padding:4px 0;">
-              <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};">${escapeHtml(c.replace(/^Add event:\s*/, ""))}${
-                url ? ` — <a href="${escapeHtml(url)}" style="color:${C.greenLight};">Nettside ↗</a>` : ""
-              }</div>
+              <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};">${nameHtml}</div>
               ${synopsis ? `<div style="font:12px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:2px;">${escapeHtml(synopsis)}</div>` : ""}
             </div>`;
           })
@@ -1203,12 +1206,13 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
         .map((e) => {
           const days = daysUntil(e.startDato);
           const synopsis = shortSynopsis(e.beskrivelse);
+          const nameHtml = e.url
+            ? `<a href="${escapeHtml(e.url)}" style="color:${C.heading};text-decoration:underline;text-decoration-color:${C.border};">${escapeHtml(e.navn)}</a>`
+            : escapeHtml(e.navn);
           return `
     <div style="padding:10px 14px;border:1px solid ${C.border};border-radius:8px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">
       <div>
-        <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:${C.heading};">${escapeHtml(e.navn)}${
-            e.url ? ` — <a href="${escapeHtml(e.url)}" style="color:${C.greenLight};font-weight:600;">Nettside ↗</a>` : ""
-          }</div>
+        <div style="font:600 14px -apple-system,'Segoe UI',sans-serif;color:${C.heading};">${nameHtml}</div>
         <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:2px;">${escapeHtml(formatDateNo(new Date(e.startDato)))}${synopsis ? ` · ${escapeHtml(synopsis)}` : ""}</div>
       </div>
       <span style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${C.greenLight};background:${C.greenLight}26;padding:4px 10px;border-radius:999px;white-space:nowrap;">om ${days} dag${days === 1 ? "" : "er"}</span>
