@@ -155,7 +155,9 @@ async function getSocialMediaReport() {
 
   const [igAccount, igMedia, fbPage, fbPosts] = await Promise.all([
     fetchMetaJson(`${base}/${META_IG_ID}?fields=followers_count,media_count&access_token=${META_PAGE_ACCESS_TOKEN}`),
-    fetchMetaJson(`${base}/${META_IG_ID}/media?fields=id,timestamp,like_count,comments_count&limit=25&access_token=${META_PAGE_ACCESS_TOKEN}`),
+    fetchMetaJson(
+      `${base}/${META_IG_ID}/media?fields=id,timestamp,caption,media_type,like_count,comments_count&limit=25&access_token=${META_PAGE_ACCESS_TOKEN}`
+    ),
     fetchMetaJson(`${base}/${META_PAGE_ID}?fields=fan_count&access_token=${META_PAGE_ACCESS_TOKEN}`),
     fetchMetaJson(
       `${base}/${META_PAGE_ID}/posts?fields=id,created_time,likes.summary(true).limit(0),comments.summary(true).limit(0)&limit=25&access_token=${META_PAGE_ACCESS_TOKEN}`
@@ -168,6 +170,13 @@ async function getSocialMediaReport() {
   const fbRecent = (fbPosts?.data || []).filter((p) => new Date(p.created_time).getTime() >= weekAgo);
 
   const igInsights = await Promise.all(igRecent.map((m) => getIgMediaInsights(m.id)));
+  const instagramPosts = igRecent.map((m, i) => ({
+    caption: (m.caption || "").slice(0, 140),
+    mediaType: m.media_type || "UKJENT",
+    likes: m.like_count || 0,
+    comments: m.comments_count || 0,
+    ...igInsights[i],
+  }));
 
   const instagram = igAccount
     ? {
@@ -192,16 +201,100 @@ async function getSocialMediaReport() {
       }
     : null;
 
-  return { instagram, facebook };
+  return { instagram, facebook, instagramPosts };
+}
+
+// Short, grounded qualitative writeup (what worked / what didn't / one actionable
+// tip) generated from THIS week's real per-post numbers - no web search, no
+// invented figures. If Claude fails to produce a usable response, the section is
+// simply omitted rather than blocking the digest.
+async function getInstagramAnalysis(report) {
+  if (!report?.instagram) return null;
+  const ig = report.instagram;
+  const posts = report.instagramPosts || [];
+
+  const postsList = posts.length
+    ? posts
+        .map(
+          (p, i) =>
+            `${i + 1}. "${p.caption || "(ingen tekst)"}" (${p.mediaType}): ${p.reach} rekkevidde, ${p.views} visninger, ${p.likes} liker, ${p.comments} kommentarer, ${p.saved} lagringer, ${p.shares} delinger`
+        )
+        .join("\n")
+    : "Ingen innlegg ble publisert denne uken.";
+
+  const prompt = `Du er en sosiale medier-analytiker for Palm Tree Productions (PTP), et videoproduksjonsselskap i Ålesund som lager innhold for merkevarer, bedrifter og artister (bl.a. Kygo).
+
+Instagram-tall for uken:
+- Følgere: ${ig.followers}
+- Nye innlegg: ${ig.postsThisWeek}
+- Total rekkevidde: ${ig.reachThisWeek}, visninger: ${ig.viewsThisWeek}
+- Liker: ${ig.likesThisWeek}, kommentarer: ${ig.commentsThisWeek}, lagringer: ${ig.savedThisWeek}, delinger: ${ig.sharesThisWeek}
+
+Innlegg denne uken:
+${postsList}
+
+Skriv en KORT rapport i tre deler, grounded utelukkende i tallene og innleggene over.
+
+HARD RULE: Ikke gjett eller finn på tall, innleggstyper, eller trender som ikke er nevnt over. Hvis det ikke var noen innlegg denne uken, skal "Hva funket" ærlig reflektere det (f.eks. at ingenting ble publisert) i stedet for å finne på noe positivt.
+
+Svar med KUN ren tekst i nøyaktig dette formatet, én setning per linje, ingen markdown:
+Hva funket: <1 setning>
+Hva funket ikke: <1 setning>
+Tips: <1 konkret, gjennomførbart tips til neste uke>`;
+
+  try {
+    const response = await lib.anthropic.messages.create({
+      model: lib.MODEL,
+      max_tokens: 400,
+      messages: [{ role: "user", content: prompt }],
+    });
+    const text = response.content.find((b) => b.type === "text")?.text?.trim();
+    if (!text) return null;
+
+    const match = {
+      worked: text.match(/Hva funket:\s*(.+)/)?.[1]?.trim(),
+      didntWork: text.match(/Hva funket ikke:\s*(.+)/)?.[1]?.trim(),
+      tip: text.match(/Tips:\s*(.+)/)?.[1]?.trim(),
+    };
+    if (!match.worked || !match.didntWork || !match.tip) return null;
+    return match;
+  } catch (e) {
+    lib.log("digest", `Instagram analysis skipped (${e.message}).`);
+    return null;
+  }
+}
+
+// Finds the snapshot whose actual date is closest to targetDate, but only returns
+// it if within toleranceDays - a snapshot from 2 months ago should never silently
+// stand in for "1 month ago" just because it's the closest thing available.
+function findClosestSnapshot(history, targetDate, toleranceDays) {
+  let best = null;
+  let bestDiffMs = Infinity;
+  for (const s of history) {
+    if (!s.ts) continue;
+    const diffMs = Math.abs(new Date(s.ts).getTime() - targetDate.getTime());
+    if (diffMs < bestDiffMs) {
+      bestDiffMs = diffMs;
+      best = s;
+    }
+  }
+  return best && bestDiffMs <= toleranceDays * 86400000 ? best : null;
 }
 
 // Saves this week's snapshot (upsert-by-ISO-week, so a re-run this week overwrites
-// rather than duplicates) and returns the prior week's snapshot plus recent history,
-// so growth can be shown and a trend chart built.
+// rather than duplicates) and returns the prior week/month/year snapshots (whichever
+// actually exist yet - the automation only started 2026-09-02, so month/year
+// comparisons will be null until real history accumulates) plus recent history for
+// the growth chart.
 async function updateSnapshotsAndGetHistory(report) {
-  const week = isoWeek(new Date());
+  const now = new Date();
+  const week = isoWeek(now);
   const existing = (await fetchJson(`${SITE_URL}/api/some-snapshots`)) || [];
-  const prior = existing.filter((s) => s.week !== week).slice(-1)[0] || null;
+  const beforeThisWeek = existing.filter((s) => s.week !== week);
+
+  const prior = beforeThisWeek.slice(-1)[0] || null;
+  const priorMonth = findClosestSnapshot(beforeThisWeek, new Date(now.getTime() - 30 * 86400000), 5);
+  const priorYear = findClosestSnapshot(beforeThisWeek, new Date(now.getTime() - 365 * 86400000), 10);
 
   try {
     const res = await fetch(`${SITE_URL}/api/some-snapshots`, {
@@ -214,10 +307,10 @@ async function updateSnapshotsAndGetHistory(report) {
     lib.log("digest", `Failed to save SoMe snapshot: ${e.message}`);
   }
 
-  const history = [...existing.filter((s) => s.week !== week), { week, instagram: report.instagram, facebook: report.facebook }].sort(
-    (a, b) => a.week.localeCompare(b.week)
+  const history = [...beforeThisWeek, { week, ts: now.toISOString(), instagram: report.instagram, facebook: report.facebook }].sort((a, b) =>
+    a.week.localeCompare(b.week)
   );
-  return { prior, history: history.slice(-12) };
+  return { prior, priorMonth, priorYear, history: history.slice(-60) };
 }
 
 // Renders a follower-growth line chart via QuickChart's hosted image API (no API key
@@ -311,16 +404,31 @@ function enrichLeadLine(commitMsg, leadsByOrgnr) {
   return `${name} — score ${lead.score}, ${lead.fylke || "ukjent fylke"}`;
 }
 
-function followerDeltaText(current, prior) {
-  if (prior == null || prior.followers == null) return `${current.followers} følgere`;
-  const delta = current.followers - prior.followers;
-  const sign = delta > 0 ? "+" : "";
-  return `${current.followers} følgere (${sign}${delta} denne uken)`;
+function followerDelta(current, prior) {
+  if (prior == null || prior.followers == null) return null;
+  return current.followers - prior.followers;
 }
 
-function growthLine(label, current, prior) {
+function followerDeltaText(current, prior, priorMonth, priorYear) {
+  const parts = [`${current.followers} følgere`];
+  const week = followerDelta(current, prior);
+  const month = followerDelta(current, priorMonth);
+  const year = followerDelta(current, priorYear);
+  const sign = (n) => (n > 0 ? "+" : "");
+  if (week != null) parts.push(`${sign(week)}${week} denne uken`);
+  if (month != null) parts.push(`${sign(month)}${month} siste måned`);
+  if (year != null) parts.push(`${sign(year)}${year} siste år`);
+  return parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(", ")})` : parts[0];
+}
+
+function growthLine(label, current, prior, priorMonth, priorYear) {
   if (current == null) return null;
-  const parts = [followerDeltaText(current, prior), `${current.postsThisWeek} nye innlegg`, `${current.likesThisWeek} liker`, `${current.commentsThisWeek} kommentarer`];
+  const parts = [
+    followerDeltaText(current, prior, priorMonth, priorYear),
+    `${current.postsThisWeek} nye innlegg`,
+    `${current.likesThisWeek} liker`,
+    `${current.commentsThisWeek} kommentarer`,
+  ];
   if (current.reachThisWeek != null) {
     parts.push(`${current.reachThisWeek} rekkevidde`, `${current.viewsThisWeek} visninger`, `${current.savedThisWeek} lagringer`, `${current.sharesThisWeek} delinger`);
   }
@@ -335,11 +443,19 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup,
 
   if (someReport) {
     lines.push(`Sosiale medier denne uken:`);
-    const igLine = growthLine("Instagram", someReport.report.instagram, someReport.prior?.instagram);
-    const fbLine = growthLine("Facebook", someReport.report.facebook, someReport.prior?.facebook);
+    const igLine = growthLine("Instagram", someReport.report.instagram, someReport.prior?.instagram, someReport.priorMonth?.instagram, someReport.priorYear?.instagram);
+    const fbLine = growthLine("Facebook", someReport.report.facebook, someReport.prior?.facebook, someReport.priorMonth?.facebook, someReport.priorYear?.facebook);
     if (igLine) lines.push(igLine);
     if (fbLine) lines.push(fbLine);
     lines.push(``);
+
+    if (someReport.analysis) {
+      lines.push(`Instagram-rapport:`);
+      lines.push(`  Hva funket: ${someReport.analysis.worked}`);
+      lines.push(`  Hva funket ikke: ${someReport.analysis.didntWork}`);
+      lines.push(`  Tips: ${someReport.analysis.tip}`);
+      lines.push(``);
+    }
   }
 
   if (trends.length) {
@@ -428,11 +544,19 @@ function htmlLeadCard(name, badgeText, badgeColor, sub) {
     </div>`;
 }
 
-function deltaSpan(delta) {
+function deltaSpan(delta, periodLabel) {
   if (delta == null) return "";
   const sign = delta > 0 ? "+" : "";
   const color = delta > 0 ? "#3FA873" : delta < 0 ? "#DC2626" : "#6B7280";
-  return `<span style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${color};">${sign}${delta} denne uken</span>`;
+  return `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${color};">${sign}${delta} ${periodLabel}</div>`;
+}
+
+function followerDeltaHtml(current, prior, priorMonth, priorYear) {
+  return [
+    deltaSpan(followerDelta(current, prior), "denne uken"),
+    deltaSpan(followerDelta(current, priorMonth), "siste måned"),
+    deltaSpan(followerDelta(current, priorYear), "siste år"),
+  ].join("");
 }
 
 // A metric-block grid mirroring the "Instagram/Facebook Performance Summary" style:
@@ -463,12 +587,11 @@ function htmlMetricGrid(platformLabel, items) {
     </table>`;
 }
 
-function htmlStatCard(label, current, prior) {
+function htmlStatCard(label, current, prior, priorMonth, priorYear) {
   if (current == null) return "";
-  const followerDelta = prior != null && prior.followers != null ? current.followers - prior.followers : null;
 
   const items = [
-    { label: "Følgere", value: String(current.followers), deltaHtml: deltaSpan(followerDelta) },
+    { label: "Følgere", value: String(current.followers), deltaHtml: followerDeltaHtml(current, prior, priorMonth, priorYear) },
     { label: "Publiserte innlegg", value: String(current.postsThisWeek) },
     { label: "Liker", value: String(current.likesThisWeek) },
     { label: "Kommentarer", value: String(current.commentsThisWeek) },
@@ -497,10 +620,22 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
       : "";
     body += htmlSection(
       "Sosiale medier denne uken",
-      htmlStatCard("Instagram", someReport.report.instagram, someReport.prior?.instagram) +
-        htmlStatCard("Facebook", someReport.report.facebook, someReport.prior?.facebook) +
+      htmlStatCard("Instagram", someReport.report.instagram, someReport.prior?.instagram, someReport.priorMonth?.instagram, someReport.priorYear?.instagram) +
+        htmlStatCard("Facebook", someReport.report.facebook, someReport.prior?.facebook, someReport.priorMonth?.facebook, someReport.priorYear?.facebook) +
         chartHtml
     );
+
+    if (someReport.analysis) {
+      body += htmlSection(
+        "Instagram-rapport",
+        `
+        <div style="font:13px/1.6 -apple-system,'Segoe UI',sans-serif;color:#374151;">
+          <div style="margin-bottom:8px;"><strong style="color:#3FA873;">Hva funket:</strong> ${escapeHtml(someReport.analysis.worked)}</div>
+          <div style="margin-bottom:8px;"><strong style="color:#DC2626;">Hva funket ikke:</strong> ${escapeHtml(someReport.analysis.didntWork)}</div>
+          <div><strong style="color:#14171A;">Tips:</strong> ${escapeHtml(someReport.analysis.tip)}</div>
+        </div>`
+      );
+    }
   }
 
   if (followup.uncontacted.length) {
@@ -637,9 +772,9 @@ async function main() {
   const rawReport = await getSocialMediaReport();
   let someReport = null;
   if (rawReport) {
-    const { prior, history } = await updateSnapshotsAndGetHistory(rawReport);
-    const chartBase64 = await buildGrowthChartBase64(history);
-    someReport = { report: rawReport, prior, chartBase64 };
+    const { prior, priorMonth, priorYear, history } = await updateSnapshotsAndGetHistory(rawReport);
+    const [chartBase64, analysis] = await Promise.all([buildGrowthChartBase64(history), getInstagramAnalysis(rawReport)]);
+    someReport = { report: rawReport, prior, priorMonth, priorYear, chartBase64, analysis };
   }
 
   lib.log(
@@ -670,6 +805,7 @@ module.exports = {
   fetchJson,
   getTrendIdeas,
   getSocialMediaReport,
+  getInstagramAnalysis,
   updateSnapshotsAndGetHistory,
   buildGrowthChartBase64,
   isoWeek,
