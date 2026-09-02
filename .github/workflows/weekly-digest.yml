@@ -1,0 +1,26 @@
+name: Weekly Digest Email
+
+on:
+  schedule:
+    # 04:15 UTC Monday = 06:15 Norway time during CEST - after the Konkurranse/Event
+    # weekly jobs (05:30/05:45) so the digest can include that morning's results too.
+    # Bump to 05:15 UTC once DST ends in late October.
+    - cron: "15 4 * * 1"
+  workflow_dispatch: {}
+
+jobs:
+  digest:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: cd lead-finder && npm install --no-audit --no-fund
+
+      - name: Send weekly digest
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PTP_SITE_DEPLOY_KEY: ${{ secrets.PTP_SITE_DEPLOY_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          DIGEST_FROM_EMAIL: ${{ secrets.DIGEST_FROM_EMAIL }}
+        run: node lead-finder/weekly-digest.js
