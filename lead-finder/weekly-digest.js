@@ -36,6 +36,34 @@ function loadLeadsData() {
   return JSON.parse(fs.readFileSync(p, "utf8"));
 }
 
+function loadEventsData() {
+  const p = path.join(lib.WORK_DIR, "source-data", "events-data.json");
+  if (!fs.existsSync(p)) return [];
+  return JSON.parse(fs.readFileSync(p, "utf8"));
+}
+
+// Trims a longer real description down to one short line for a synopsis - prefers
+// the first sentence, falls back to a hard character cut with an ellipsis. Never
+// invents text; returns null if there's nothing to summarize.
+function shortSynopsis(text, maxLen = 110) {
+  if (!text) return null;
+  const firstSentence = text.match(/^[^.!?]*[.!?]/)?.[0]?.trim();
+  const candidate = firstSentence && firstSentence.length <= maxLen ? firstSentence : text;
+  return candidate.length > maxLen ? `${candidate.slice(0, maxLen - 1).trim()}…` : candidate;
+}
+
+function getLeadSynopsis(commitMsg, leadsByOrgnr) {
+  const orgnrMatch = commitMsg.match(/\((\d+)\)\s*$/);
+  const lead = orgnrMatch ? leadsByOrgnr.get(orgnrMatch[1]) : null;
+  return shortSynopsis(lead?.begrunnelse);
+}
+
+function getEventSynopsis(commitMsg, eventsByName) {
+  const name = commitMsg.replace(/^Add event:\s*/, "").replace(/\s*\([^)]*\)\s*$/, "").trim();
+  const event = eventsByName.get(name);
+  return shortSynopsis(event?.beskrivelse);
+}
+
 // The whole site (including these GET endpoints) sits behind site-wide Basic Auth
 // via functions/_middleware.js. SITE_BASIC_AUTH is a dedicated "digest-bot:<password>"
 // credential added to Cloudflare's SITE_CREDENTIALS just for this script, so it can
@@ -119,31 +147,42 @@ async function fetchMetaJson(url) {
   }
 }
 
-// Per-post Instagram insights (reach/views/saves/shares/total_interactions) - real
-// metrics confirmed working against the account, unlike the classic Facebook Page
-// Insights metrics (impressions, engaged_users, etc.), which are deprecated on this
-// API version and return errors regardless of permissions. Instagram's numbers are
-// therefore richer than Facebook's below - that's a real platform limitation, not
-// something skipped for convenience.
-async function getIgMediaInsights(mediaId) {
+// Real account-level activity totals for an arbitrary window (max 30-day span, a
+// hard Instagram API limit) - this is the metric that actually answers "how much
+// activity did the account get in this period," unlike summing per-post lifetime
+// stats for posts published in the window, which reads as zero in any week with no
+// new posts even though the account is still getting real reach/likes on older
+// content. That mismatch is exactly what looked like a bug before this fix.
+async function getIgAccountInsights(sinceEpoch, untilEpoch) {
   const base = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
+  const metrics = "reach,likes,comments,shares,saves,total_interactions,accounts_engaged,profile_views";
   const body = await fetchMetaJson(
-    `${base}/${mediaId}/insights?metric=reach,views,saved,shares,total_interactions&access_token=${META_PAGE_ACCESS_TOKEN}`
+    `${base}/${META_IG_ID}/insights?metric=${metrics}&metric_type=total_value&period=day&since=${sinceEpoch}&until=${untilEpoch}&access_token=${META_PAGE_ACCESS_TOKEN}`
   );
-  const byName = Object.fromEntries((body?.data || []).map((m) => [m.name, m.values?.[0]?.value ?? 0]));
+  const byName = Object.fromEntries((body?.data || []).map((m) => [m.name, m.total_value?.value ?? 0]));
   return {
     reach: byName.reach || 0,
-    views: byName.views || 0,
-    saved: byName.saved || 0,
+    likes: byName.likes || 0,
+    comments: byName.comments || 0,
     shares: byName.shares || 0,
+    saved: byName.saves || 0,
     totalInteractions: byName.total_interactions || 0,
+    accountsEngaged: byName.accounts_engaged || 0,
+    profileViews: byName.profile_views || 0,
   };
 }
 
-// Pulls this week's actual post counts, engagement, reach, and current follower
-// counts from Instagram + Facebook via the Meta Graph API. Returns null (section
-// skipped entirely, digest still sends) if the token is missing or both platforms
-// fail - this is enrichment, not something that should ever block the weekly send.
+// Pulls real account-level activity (this week, prior week for a week-over-week
+// arrow, this month) plus post counts and current follower counts from Instagram +
+// Facebook via the Meta Graph API. Returns null (section skipped entirely, digest
+// still sends) if the token is missing or both platforms fail - this is enrichment,
+// not something that should ever block the weekly send.
+//
+// Year-over-year for these activity metrics isn't available in one call - Instagram
+// caps any single insights query at a 30-day span - so it's intentionally omitted
+// here rather than faked. Follower count comparisons (a point-in-time value, not a
+// windowed total) aren't affected by that cap and still get a real year comparison
+// once enough weekly snapshots exist.
 async function getSocialMediaReport() {
   if (!META_PAGE_ACCESS_TOKEN) {
     lib.log("digest", "META_PAGE_ACCESS_TOKEN not set - skipping SoMe report.");
@@ -151,10 +190,12 @@ async function getSocialMediaReport() {
   }
 
   const base = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
-  const weekAgo = Date.now() - 7 * 86400000;
+  const now = Math.floor(Date.now() / 1000);
+  const day = 86400;
+  const weekAgoMs = Date.now() - 7 * 86400000;
 
-  const [igAccount, igMedia, fbPage, fbPosts] = await Promise.all([
-    fetchMetaJson(`${base}/${META_IG_ID}?fields=followers_count,media_count&access_token=${META_PAGE_ACCESS_TOKEN}`),
+  const [igAccount, igMedia, fbPage, fbPosts, igWeek, igPriorWeek, igMonth] = await Promise.all([
+    fetchMetaJson(`${base}/${META_IG_ID}?fields=username,followers_count,media_count&access_token=${META_PAGE_ACCESS_TOKEN}`),
     fetchMetaJson(
       `${base}/${META_IG_ID}/media?fields=id,timestamp,caption,media_type,like_count,comments_count&limit=25&access_token=${META_PAGE_ACCESS_TOKEN}`
     ),
@@ -162,33 +203,31 @@ async function getSocialMediaReport() {
     fetchMetaJson(
       `${base}/${META_PAGE_ID}/posts?fields=id,created_time,likes.summary(true).limit(0),comments.summary(true).limit(0)&limit=25&access_token=${META_PAGE_ACCESS_TOKEN}`
     ),
+    getIgAccountInsights(now - 7 * day, now),
+    getIgAccountInsights(now - 14 * day, now - 7 * day),
+    getIgAccountInsights(now - 30 * day, now),
   ]);
 
   if (!igAccount && !fbPage) return null;
 
-  const igRecent = (igMedia?.data || []).filter((m) => new Date(m.timestamp).getTime() >= weekAgo);
-  const fbRecent = (fbPosts?.data || []).filter((p) => new Date(p.created_time).getTime() >= weekAgo);
+  const igRecent = (igMedia?.data || []).filter((m) => new Date(m.timestamp).getTime() >= weekAgoMs);
+  const fbRecent = (fbPosts?.data || []).filter((p) => new Date(p.created_time).getTime() >= weekAgoMs);
 
-  const igInsights = await Promise.all(igRecent.map((m) => getIgMediaInsights(m.id)));
-  const instagramPosts = igRecent.map((m, i) => ({
+  const instagramPosts = igRecent.map((m) => ({
     caption: (m.caption || "").slice(0, 140),
     mediaType: m.media_type || "UKJENT",
     likes: m.like_count || 0,
     comments: m.comments_count || 0,
-    ...igInsights[i],
   }));
 
   const instagram = igAccount
     ? {
+        username: igAccount.username || null,
         followers: igAccount.followers_count ?? null,
         postsThisWeek: igRecent.length,
-        likesThisWeek: igRecent.reduce((sum, m) => sum + (m.like_count || 0), 0),
-        commentsThisWeek: igRecent.reduce((sum, m) => sum + (m.comments_count || 0), 0),
-        reachThisWeek: igInsights.reduce((sum, i) => sum + i.reach, 0),
-        viewsThisWeek: igInsights.reduce((sum, i) => sum + i.views, 0),
-        interactionsThisWeek: igInsights.reduce((sum, i) => sum + i.totalInteractions, 0),
-        savedThisWeek: igInsights.reduce((sum, i) => sum + i.saved, 0),
-        sharesThisWeek: igInsights.reduce((sum, i) => sum + i.shares, 0),
+        week: igWeek,
+        priorWeek: igPriorWeek,
+        month: igMonth,
       }
     : null;
 
@@ -214,28 +253,24 @@ async function getInstagramAnalysis(report) {
   const posts = report.instagramPosts || [];
 
   const postsList = posts.length
-    ? posts
-        .map(
-          (p, i) =>
-            `${i + 1}. "${p.caption || "(ingen tekst)"}" (${p.mediaType}): ${p.reach} rekkevidde, ${p.views} visninger, ${p.likes} liker, ${p.comments} kommentarer, ${p.saved} lagringer, ${p.shares} delinger`
-        )
-        .join("\n")
+    ? posts.map((p, i) => `${i + 1}. "${p.caption || "(ingen tekst)"}" (${p.mediaType}): ${p.likes} liker, ${p.comments} kommentarer`).join("\n")
     : "Ingen innlegg ble publisert denne uken.";
 
   const prompt = `Du er en sosiale medier-analytiker for Palm Tree Productions (PTP), et videoproduksjonsselskap i Ålesund som lager innhold for merkevarer, bedrifter og artister (bl.a. Kygo).
 
-Instagram-tall for uken:
+Instagram-tall for kontoen @${ig.username} denne uken (hele kontoens aktivitet, ikke bare nye innlegg):
 - Følgere: ${ig.followers}
-- Nye innlegg: ${ig.postsThisWeek}
-- Total rekkevidde: ${ig.reachThisWeek}, visninger: ${ig.viewsThisWeek}
-- Liker: ${ig.likesThisWeek}, kommentarer: ${ig.commentsThisWeek}, lagringer: ${ig.savedThisWeek}, delinger: ${ig.sharesThisWeek}
+- Nye innlegg publisert: ${ig.postsThisWeek}
+- Rekkevidde: ${ig.week.reach} (uken før: ${ig.priorWeek.reach})
+- Liker: ${ig.week.likes} (uken før: ${ig.priorWeek.likes}), kommentarer: ${ig.week.comments} (uken før: ${ig.priorWeek.comments})
+- Lagringer: ${ig.week.saved}, delinger: ${ig.week.shares}, profilbesøk: ${ig.week.profileViews}
 
-Innlegg denne uken:
+Innlegg publisert denne uken (hvis noen):
 ${postsList}
 
 Skriv en KORT rapport i tre deler, grounded utelukkende i tallene og innleggene over.
 
-HARD RULE: Ikke gjett eller finn på tall, innleggstyper, eller trender som ikke er nevnt over. Hvis det ikke var noen innlegg denne uken, skal "Hva funket" ærlig reflektere det (f.eks. at ingenting ble publisert) i stedet for å finne på noe positivt.
+HARD RULE: Ikke gjett eller finn på tall, innleggstyper, eller trender som ikke er nevnt over. Merk at kontoen kan ha reell rekkevidde/engasjement selv i en uke uten nye innlegg (fra eldre innhold) - bruk de tallene ærlig i "Hva funket"/"Hva funket ikke" i stedet for å anta at ingen nye innlegg betyr ingen aktivitet i det hele tatt.
 
 Svar med KUN ren tekst i nøyaktig dette formatet, én setning per linje, ingen markdown:
 Hva funket: <1 setning>
@@ -421,7 +456,15 @@ function followerDeltaText(current, prior, priorMonth, priorYear) {
   return parts.length > 1 ? `${parts[0]} (${parts.slice(1).join(", ")})` : parts[0];
 }
 
-function growthLine(label, current, prior, priorMonth, priorYear) {
+function windowDeltaText(value, priorValue, label) {
+  if (priorValue == null) return `${value} ${label}`;
+  const delta = value - priorValue;
+  const { arrow } = trendArrow(delta);
+  const sign = delta > 0 ? "+" : "";
+  return `${value} ${label} (${arrow} ${sign}${delta} fra uken før)`;
+}
+
+function fbGrowthLine(label, current, prior, priorMonth, priorYear) {
   if (current == null) return null;
   const parts = [
     followerDeltaText(current, prior, priorMonth, priorYear),
@@ -429,22 +472,37 @@ function growthLine(label, current, prior, priorMonth, priorYear) {
     `${current.likesThisWeek} liker`,
     `${current.commentsThisWeek} kommentarer`,
   ];
-  if (current.reachThisWeek != null) {
-    parts.push(`${current.reachThisWeek} rekkevidde`, `${current.viewsThisWeek} visninger`, `${current.savedThisWeek} lagringer`, `${current.sharesThisWeek} delinger`);
-  }
   return `  ${label}: ${parts.join(", ")}`;
 }
 
-function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup, trends, someReport) {
+// Instagram's shape differs from Facebook's - real account-level activity totals
+// for this week (with a week-over-week comparison) and this month, rather than
+// stats scoped only to newly-published posts. See getSocialMediaReport for why.
+function igGrowthLine(current, prior, priorMonth, priorYear) {
+  if (current == null) return null;
+  const handle = current.username ? ` (@${current.username})` : "";
+  const parts = [
+    followerDeltaText(current, prior, priorMonth, priorYear),
+    `${current.postsThisWeek} nye innlegg`,
+    windowDeltaText(current.week.reach, current.priorWeek?.reach, "rekkevidde"),
+    windowDeltaText(current.week.likes, current.priorWeek?.likes, "liker"),
+    windowDeltaText(current.week.comments, current.priorWeek?.comments, "kommentarer"),
+    `${current.week.saved} lagringer, ${current.week.shares} delinger, ${current.week.profileViews} profilbesøk`,
+    `siste 30 dager: ${current.month.reach} rekkevidde, ${current.month.likes} liker, ${current.month.totalInteractions} interaksjoner totalt`,
+  ];
+  return `  Instagram${handle}: ${parts.join(", ")}`;
+}
+
+function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange) {
   const total = leads.length + competitors.length + events.length;
   const lines = [];
-  lines.push(`PTP Internal - ukentlig oppsummering`);
+  lines.push(`PTP Internal - ukentlig oppsummering (${weekRange})`);
   lines.push(``);
 
   if (someReport) {
     lines.push(`Sosiale medier denne uken:`);
-    const igLine = growthLine("Instagram", someReport.report.instagram, someReport.prior?.instagram, someReport.priorMonth?.instagram, someReport.priorYear?.instagram);
-    const fbLine = growthLine("Facebook", someReport.report.facebook, someReport.prior?.facebook, someReport.priorMonth?.facebook, someReport.priorYear?.facebook);
+    const igLine = igGrowthLine(someReport.report.instagram, someReport.prior?.instagram, someReport.priorMonth?.instagram, someReport.priorYear?.instagram);
+    const fbLine = fbGrowthLine("Facebook", someReport.report.facebook, someReport.prior?.facebook, someReport.priorMonth?.facebook, someReport.priorYear?.facebook);
     if (igLine) lines.push(igLine);
     if (fbLine) lines.push(fbLine);
     lines.push(``);
@@ -481,7 +539,11 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup,
   } else {
     if (leads.length) {
       lines.push(`Nye leads (${leads.length}):`);
-      leads.forEach((c) => lines.push(`  - ${enrichLeadLine(c, leadsByOrgnr)}`));
+      leads.forEach((c) => {
+        lines.push(`  - ${enrichLeadLine(c, leadsByOrgnr)}`);
+        const synopsis = getLeadSynopsis(c, leadsByOrgnr);
+        if (synopsis) lines.push(`    ${synopsis}`);
+      });
       lines.push(``);
     }
     if (competitors.length) {
@@ -491,7 +553,11 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, followup,
     }
     if (events.length) {
       lines.push(`Nye event (${events.length}):`);
-      events.forEach((c) => lines.push(`  - ${c.replace(/^Add event:\s*/, "")}`));
+      events.forEach((c) => {
+        lines.push(`  - ${c.replace(/^Add event:\s*/, "")}`);
+        const synopsis = getEventSynopsis(c, eventsByName);
+        if (synopsis) lines.push(`    ${synopsis}`);
+      });
       lines.push(``);
     }
   }
@@ -612,28 +678,59 @@ function htmlMetricGrid(platformLabel, items) {
 
 function htmlStatCard(label, current, prior, priorMonth, priorYear) {
   if (current == null) return "";
-
   const items = [
     { label: "Følgere", value: String(current.followers), deltaHtml: followerDeltaHtml(current, prior, priorMonth, priorYear) },
     { label: "Publiserte innlegg", value: String(current.postsThisWeek) },
     { label: "Liker", value: String(current.likesThisWeek) },
     { label: "Kommentarer", value: String(current.commentsThisWeek) },
   ];
-
-  if (current.reachThisWeek != null) {
-    items.push(
-      { label: "Rekkevidde", value: String(current.reachThisWeek) },
-      { label: "Visninger", value: String(current.viewsThisWeek) },
-      { label: "Total interaksjon", value: String(current.interactionsThisWeek) },
-      { label: "Lagringer", value: String(current.savedThisWeek) },
-      { label: "Delinger", value: String(current.sharesThisWeek) }
-    );
-  }
-
   return htmlMetricGrid(label, items);
 }
 
-function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup, trends, someReport) {
+function windowDeltaHtml(value, priorValue) {
+  if (priorValue == null) return "";
+  const delta = value - priorValue;
+  const { arrow, color } = trendArrow(delta);
+  const sign = delta > 0 ? "+" : "";
+  return `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${color};">${arrow} ${sign}${delta} fra uken før</div>`;
+}
+
+// Real email clients (Gmail included, which is what this audience uses) don't run
+// JS and don't reliably support the CSS radio-button "fake tabs" trick, so instead
+// of interactive tabs this shows "this week" (with a week-over-week arrow) and
+// "last 30 days" as two clearly-labeled stacked grids - same information, without
+// relying on interactivity that would silently break for the actual recipients.
+function htmlInstagramStatCard(current, prior, priorMonth, priorYear) {
+  if (current == null) return "";
+  const handle = current.username ? ` (@${escapeHtml(current.username)})` : "";
+
+  const weekItems = [
+    { label: "Følgere", value: String(current.followers), deltaHtml: followerDeltaHtml(current, prior, priorMonth, priorYear) },
+    { label: "Nye innlegg", value: String(current.postsThisWeek) },
+    { label: "Rekkevidde", value: String(current.week.reach), deltaHtml: windowDeltaHtml(current.week.reach, current.priorWeek?.reach) },
+    { label: "Liker", value: String(current.week.likes), deltaHtml: windowDeltaHtml(current.week.likes, current.priorWeek?.likes) },
+    { label: "Kommentarer", value: String(current.week.comments), deltaHtml: windowDeltaHtml(current.week.comments, current.priorWeek?.comments) },
+    { label: "Total interaksjon", value: String(current.week.totalInteractions) },
+    { label: "Lagringer", value: String(current.week.saved) },
+    { label: "Delinger", value: String(current.week.shares) },
+    { label: "Profilbesøk", value: String(current.week.profileViews) },
+  ];
+
+  const monthItems = [
+    { label: "Rekkevidde", value: String(current.month.reach) },
+    { label: "Liker", value: String(current.month.likes) },
+    { label: "Kommentarer", value: String(current.month.comments) },
+    { label: "Total interaksjon", value: String(current.month.totalInteractions) },
+    { label: "Lagringer", value: String(current.month.saved) },
+    { label: "Delinger", value: String(current.month.shares) },
+  ];
+
+  return `
+    ${htmlMetricGrid(`Instagram${handle} — denne uken`, weekItems)}
+    ${htmlMetricGrid("Instagram — siste 30 dager", monthItems)}`;
+}
+
+function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange) {
   const total = leads.length + competitors.length + events.length;
   let body = "";
 
@@ -643,7 +740,7 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
       : "";
     body += htmlSection(
       "Sosiale medier denne uken",
-      htmlStatCard("Instagram", someReport.report.instagram, someReport.prior?.instagram, someReport.priorMonth?.instagram, someReport.priorYear?.instagram) +
+      htmlInstagramStatCard(someReport.report.instagram, someReport.prior?.instagram, someReport.priorMonth?.instagram, someReport.priorYear?.instagram) +
         htmlStatCard("Facebook", someReport.report.facebook, someReport.prior?.facebook, someReport.priorMonth?.facebook, someReport.priorYear?.facebook) +
         chartHtml
     );
@@ -706,7 +803,15 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
     if (leads.length) {
       body += htmlSection(
         `Nye leads (${leads.length})`,
-        leads.map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};padding:4px 0;">${escapeHtml(enrichLeadLine(c, leadsByOrgnr))}</div>`).join("")
+        leads
+          .map((c) => {
+            const synopsis = getLeadSynopsis(c, leadsByOrgnr);
+            return `<div style="padding:4px 0;">
+              <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};">${escapeHtml(enrichLeadLine(c, leadsByOrgnr))}</div>
+              ${synopsis ? `<div style="font:12px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:2px;">${escapeHtml(synopsis)}</div>` : ""}
+            </div>`;
+          })
+          .join("")
       );
     }
     if (competitors.length) {
@@ -721,7 +826,13 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
       body += htmlSection(
         `Nye event (${events.length})`,
         events
-          .map((c) => `<div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};padding:4px 0;">${escapeHtml(c.replace(/^Add event:\s*/, ""))}</div>`)
+          .map((c) => {
+            const synopsis = getEventSynopsis(c, eventsByName);
+            return `<div style="padding:4px 0;">
+              <div style="font:13px -apple-system,'Segoe UI',sans-serif;color:${C.body};">${escapeHtml(c.replace(/^Add event:\s*/, ""))}</div>
+              ${synopsis ? `<div style="font:12px -apple-system,'Segoe UI',sans-serif;color:${C.muted};margin-top:2px;">${escapeHtml(synopsis)}</div>` : ""}
+            </div>`;
+          })
           .join("")
       );
     }
@@ -742,6 +853,7 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
           <tr><td style="padding:28px 32px 20px;border-bottom:3px solid ${C.green};">
             ${LOGO_BASE64 ? `<img src="data:image/png;base64,${LOGO_BASE64}" width="120" alt="Palm Tree Productions" style="display:block;width:120px;height:auto;margin:0 auto 14px;" />` : `<div style="font:600 12px -apple-system,'Segoe UI',sans-serif;color:${C.greenLight};letter-spacing:0.04em;text-transform:uppercase;text-align:center;">PTP Internal</div>`}
             <h1 style="margin:0;font:700 22px -apple-system,'Segoe UI',sans-serif;color:${C.heading};text-align:center;">Ukentlig oppsummering</h1>
+            <div style="margin-top:4px;font:13px -apple-system,'Segoe UI',sans-serif;color:${C.muted};text-align:center;">${escapeHtml(weekRange)}</div>
           </td></tr>
           ${body}
           <tr><td style="padding:24px 32px 32px;">
@@ -754,7 +866,18 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, followup,
 </html>`;
 }
 
-async function sendDigest(text, html) {
+function formatDateNo(date) {
+  const dd = String(date.getDate()).padStart(2, "0");
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  return `${dd}.${mm}.${date.getFullYear()}`;
+}
+
+function weekRangeLabel(now) {
+  const start = new Date(now.getTime() - 6 * 86400000);
+  return `${formatDateNo(start)} - ${formatDateNo(now)}`;
+}
+
+async function sendDigest(text, html, weekRange) {
   if (!RESEND_API_KEY) {
     lib.log("digest", "RESEND_API_KEY not set - skipping send, printing digest instead:");
     console.log(text);
@@ -769,7 +892,7 @@ async function sendDigest(text, html) {
     body: JSON.stringify({
       from: DIGEST_FROM,
       to: DIGEST_TO,
-      subject: "PTP Internal - ukentlig oppsummering",
+      subject: `PTP Internal - Ukentlig Oppsummering (${weekRange})`,
       text,
       html,
     }),
@@ -790,6 +913,8 @@ async function main() {
 
   const leadsData = loadLeadsData();
   const leadsByOrgnr = new Map(leadsData.map((l) => [l.orgnr, l]));
+  const eventsData = loadEventsData();
+  const eventsByName = new Map(eventsData.map((e) => [e.navn, e]));
   const [pipeline, archive] = await Promise.all([
     fetchJson(`${SITE_URL}/api/pipeline`),
     fetchJson(`${SITE_URL}/api/lead-archive`),
@@ -805,6 +930,8 @@ async function main() {
     someReport = { report: rawReport, prior, priorMonth, priorYear, chartBase64, analysis };
   }
 
+  const weekRange = weekRangeLabel(new Date());
+
   lib.log(
     "digest",
     `Past 7 days: ${grouped.leads.length} lead(s), ${grouped.competitors.length} competitor(s), ${grouped.events.length} event(s). ` +
@@ -812,9 +939,9 @@ async function main() {
       `Trends: ${trends.length}. SoMe report: ${someReport ? "yes" : "skipped"}.`
   );
 
-  const text = buildDigestText(grouped, leadsByOrgnr, followup, trends, someReport);
-  const html = buildDigestHtml(grouped, leadsByOrgnr, followup, trends, someReport);
-  await sendDigest(text, html);
+  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange);
+  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange);
+  await sendDigest(text, html, weekRange);
 }
 
 if (require.main === module) {
@@ -837,4 +964,8 @@ module.exports = {
   updateSnapshotsAndGetHistory,
   buildGrowthChartBase64,
   isoWeek,
+  weekRangeLabel,
+  loadEventsData,
+  getLeadSynopsis,
+  getEventSynopsis,
 };
