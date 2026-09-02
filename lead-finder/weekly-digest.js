@@ -431,8 +431,7 @@ async function getGmailCandidateThreads(accessToken) {
   const listRes = await fetch(listUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
   const listBody = await listRes.json();
   if (!listRes.ok) {
-    lib.log("digest", `Gmail message list failed: ${JSON.stringify(listBody)}`);
-    return [];
+    throw new Error(`Gmail message list failed: ${JSON.stringify(listBody)}`);
   }
 
   const messageIds = (listBody.messages || []).map((m) => m.id);
@@ -514,17 +513,21 @@ Ingen andre felt, ingen markdown, ingen forklaring utenfor JSON-en. Tom liste hv
   }
 }
 
-// Returns [] (section simply omitted) whenever Gmail isn't configured or any step
-// fails - this is enrichment, never something that should block the weekly send.
+// `ran` distinguishes "checked the inbox and genuinely found nothing to flag" from
+// "the check itself never happened" (not configured, or the API call failed) - two
+// very different situations that both used to render as an identical missing
+// section, making it impossible to tell the feature was even working from the
+// email alone.
 async function getImportantEmailThreads() {
   const accessToken = await getGmailAccessToken();
-  if (!accessToken) return [];
+  if (!accessToken) return { ran: false, threads: [] };
   try {
     const candidates = await getGmailCandidateThreads(accessToken);
-    return await judgeImportantThreads(candidates);
+    const threads = await judgeImportantThreads(candidates);
+    return { ran: true, threads };
   } catch (e) {
     lib.log("digest", `Gmail check skipped (${e.message}).`);
-    return [];
+    return { ran: false, threads: [] };
   }
 }
 
@@ -848,7 +851,7 @@ function buildTldrHighlights({ leadsCount, competitorsCount, upcomingEventsCount
   return items.slice(0, 4);
 }
 
-function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads = []) {
+function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads = [], emailCheckRan = false) {
   const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
   const total = leads.length + competitors.length + upcomingEvents.length;
   const lines = [];
@@ -877,9 +880,13 @@ function buildDigestText({ leads, competitors, events }, leadsByOrgnr, eventsByN
     lines.push(``);
   }
 
-  if (emailThreads.length) {
-    lines.push(`E-post som trenger oppfølging (${emailThreads.length}):`);
-    emailThreads.forEach((t) => lines.push(`  - [${t.urgency}] ${t.subject} — fra ${t.from} — ${t.reason} — ${t.link}`));
+  if (emailCheckRan) {
+    if (emailThreads.length) {
+      lines.push(`E-post som trenger oppfølging (${emailThreads.length}):`);
+      emailThreads.forEach((t) => lines.push(`  - [${t.urgency}] ${t.subject} — fra ${t.from} — ${t.reason} — ${t.link}`));
+    } else {
+      lines.push(`E-post som trenger oppfølging: Ingen denne uken.`);
+    }
     lines.push(``);
   }
 
@@ -1205,7 +1212,7 @@ function htmlEmailThreadCard(t) {
     </div>`;
 }
 
-function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads = []) {
+function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads = [], emailCheckRan = false) {
   const upcomingEvents = events.filter((c) => isEventUpcoming(c, eventsByName));
   const total = leads.length + competitors.length + upcomingEvents.length;
   let body = "";
@@ -1224,8 +1231,13 @@ function buildDigestHtml({ leads, competitors, events }, leadsByOrgnr, eventsByN
   body += htmlTldrBox(highlights);
   body += htmlWarningBox(tokenHealth);
 
-  if (emailThreads.length) {
-    body += htmlSection(`E-post som trenger oppfølging (${emailThreads.length})`, emailThreads.map(htmlEmailThreadCard).join(""));
+  if (emailCheckRan) {
+    body += emailThreads.length
+      ? htmlSection(`E-post som trenger oppfølging (${emailThreads.length})`, emailThreads.map(htmlEmailThreadCard).join(""))
+      : htmlSection(
+          "E-post som trenger oppfølging",
+          `<div style="font:13px/1.5 -apple-system,'Segoe UI',sans-serif;color:${C.muted};">Ingen e-poster krever oppfølging denne uken.</div>`
+        );
   }
 
   if (movements.length) {
@@ -1507,7 +1519,7 @@ async function main() {
     someReport = { report: rawReport, prior, priorMonth, priorYear, chartBase64, analysis };
   }
   const tokenHealth = await checkMetaTokenHealth();
-  const emailThreads = await getImportantEmailThreads();
+  const { ran: emailCheckRan, threads: emailThreads } = await getImportantEmailThreads();
 
   const weekRange = weekRangeLabel(new Date());
 
@@ -1516,11 +1528,11 @@ async function main() {
     `Past 7 days: ${grouped.leads.length} lead(s), ${grouped.competitors.length} competitor(s), ${grouped.events.length} event(s). ` +
       `Follow-up: ${followup.uncontacted.length} uncontacted high-score, ${followup.stale.length} stale in pipeline. ` +
       `Trends: ${trends.length}. SoMe report: ${someReport ? "yes" : "skipped"}. Token health: ${tokenHealth ? (tokenHealth.ok ? "ok" : tokenHealth.reason) : "n/a"}. ` +
-      `Email threads flagged: ${emailThreads.length}.`
+      `Email check: ${emailCheckRan ? `ran, ${emailThreads.length} flagged` : "skipped"}.`
   );
 
-  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads);
-  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads);
+  const text = buildDigestText(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads, emailCheckRan);
+  const html = buildDigestHtml(grouped, leadsByOrgnr, eventsByName, followup, trends, someReport, weekRange, movements, winLoss, topOpportunity, eventsReminder, tokenHealth, emailThreads, emailCheckRan);
   await sendDigest(text, html, weekRange);
 }
 
