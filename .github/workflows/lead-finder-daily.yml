@@ -2,11 +2,12 @@ name: Lead Finder Daily
 
 on:
   schedule:
-    # 03:00 UTC = 05:00 Norway time during CEST (summer time, UTC+2). GitHub Actions
-    # cron is always UTC with no timezone option - this will need updating to 04:00
-    # UTC once Norway switches back to CET (UTC+1) in late October, or it'll quietly
-    # drift to 06:00 local.
-    - cron: "0 3 * * *"
+    # 03:07 UTC = ~05:07 Norway time during CEST (summer time, UTC+2). Off the round
+    # hour on purpose - GitHub Actions delays scheduled runs most at :00/:15/:30/:45
+    # (the busiest queue moments across all of GitHub), so a few minutes' offset cuts
+    # the typical delay. This will need updating to 04:07 UTC once Norway switches
+    # back to CET (UTC+1) in late October, or it'll quietly drift to 06:07 local.
+    - cron: "7 3 * * *"
   workflow_dispatch: {}
 
 jobs:

@@ -2,9 +2,11 @@ name: Konkurranse Weekly
 
 on:
   schedule:
-    # 03:30 UTC Monday = 05:30 Norway time during CEST. Bump to 04:30 UTC once DST
-    # ends in late October (GitHub Actions cron has no timezone option).
-    - cron: "30 3 * * 1"
+    # 03:37 UTC Monday = ~05:37 Norway time during CEST. Off the round half-hour on
+    # purpose - GitHub Actions delays scheduled runs most at :00/:15/:30/:45 (the
+    # busiest queue moments across all of GitHub). Bump to 04:37 UTC once DST ends in
+    # late October (GitHub Actions cron has no timezone option).
+    - cron: "37 3 * * 1"
   workflow_dispatch: {}
 
 jobs:
